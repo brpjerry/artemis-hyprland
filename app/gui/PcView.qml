@@ -519,7 +519,8 @@ CenteredGridView {
     Connections {
         target: computerModel
         function onModelAboutToBeReset() {
-            if (otpPairDialog.opened) {
+            // visible also covers the opening transition, before opened is set
+            if (otpPairDialog.visible) {
                 otpPairDialog.reject()
             }
         }

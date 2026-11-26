@@ -47,9 +47,9 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
     case ApolloVersionRole:
         return computer->apolloVersion;
     case OTPSupportedRole:
-        // Apollo only: it advertises ApolloVersion and/or an Apollo Permission
-        // mask in serverinfo. Sunshine and GFE report neither and can't do OTP.
-        return !computer->apolloVersion.isEmpty() || computer->serverPermissions != 0;
+        // The same rule as PcView's click path, which offers OTP only when the
+        // host advertises ApolloVersion. Sunshine and GFE never do.
+        return !computer->apolloVersion.isEmpty();
     case DetailsRole: {
         QString state, pairState;
 

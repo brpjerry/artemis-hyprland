@@ -88,9 +88,9 @@ build_project() {
     
     # Clean any existing build files
     echo "🧹 Cleaning previous builds..."
-    # qmake regenerates the Makefiles; don't delete them across the tree
-    # (submodules included)
-    rm -f .qmake.stash .qmake.cache
+    # qmake regenerates the Makefiles (qmake_all below); don't delete them
+    # across the tree, and keep .qmake.cache, which may hold local settings
+    rm -f .qmake.stash
     
     case $OS in
         "linux"|"macos")
@@ -105,7 +105,10 @@ build_project() {
             
             echo "🔧 Running qmake..."
             $QMAKE artemis.pro CONFIG+=debug
-            
+            # Regenerate the subprojects' Makefiles too, so an earlier
+            # configuration (another Qt kit, release) isn't reused
+            make qmake_all
+
             echo "🔨 Compiling..."
             if [[ "$OS" == "macos" ]]; then
                 make -j$(sysctl -n hw.ncpu)
@@ -126,8 +129,12 @@ build_project() {
 create_dev_config() {
     echo "⚙️  Creating development configuration..."
     
-    # Create a development settings file
+    # Create a development settings file, once: don't overwrite local changes
     mkdir -p ~/.config/artemis-dev
+    if [[ -f ~/.config/artemis-dev/dev-settings.conf ]]; then
+        echo "📝 Keeping the existing ~/.config/artemis-dev/dev-settings.conf"
+        return
+    fi
     cat > ~/.config/artemis-dev/dev-settings.conf << EOF
 # Artemis Qt Development Settings
 # This file contains development-specific settings
@@ -153,9 +160,14 @@ show_next_steps() {
     echo "✅ Development environment setup complete!"
     echo ""
     echo "🎯 Next steps:"
-    echo "   1. Start implementing Artemis features (see DEVELOPMENT.md)"
-    echo "   2. Run the application:"
-    
+    echo "   1. Start implementing Artemis features (see docs/DEVELOPMENT.md)"
+    if [[ "$OS" == "windows" || "$SKIP_BUILD" == true ]]; then
+        echo "   2. Build it (Windows needs the manual Qt Command Prompt build above),"
+        echo "      then run the application:"
+    else
+        echo "   2. Run the application:"
+    fi
+
     case $OS in
         "linux")
             echo "      ./app/artemis"
@@ -174,7 +186,7 @@ show_next_steps() {
     echo "      - OTP pairing"
     echo ""
     echo "📚 Documentation:"
-    echo "   - Development guide: DEVELOPMENT.md"
+    echo "   - Development guide: docs/DEVELOPMENT.md"
     echo "   - Contributing: CONTRIBUTING.md"
     echo "   - Artemis Android reference: https://github.com/ClassicOldSong/moonlight-android"
     echo ""

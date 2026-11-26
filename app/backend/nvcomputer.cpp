@@ -227,8 +227,12 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
     // Parse server permissions (Apollo servers only)
     QString permissionStr = NvHTTP::getXmlString(serverInfo, "Permission");
     if (!permissionStr.isEmpty()) {
+        // Apollo sends a decimal mask; also accept an explicit 0x-prefixed one
         bool ok;
-        this->serverPermissions = permissionStr.toUInt(&ok);
+        const QString trimmed = permissionStr.trimmed();
+        this->serverPermissions = trimmed.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)
+                ? trimmed.mid(2).toUInt(&ok, 16)
+                : trimmed.toUInt(&ok, 10);
         if (ok) {
             qDebug() << "Apollo server permissions:" << QString("0x%1").arg(this->serverPermissions, 0, 16) << "(" << this->serverPermissions << ")";
         } else {

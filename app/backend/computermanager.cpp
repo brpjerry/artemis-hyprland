@@ -664,7 +664,7 @@ void ComputerManager::pairHost(NvComputer* computer, QString pin)
 // (otpauth) and salt. Keep them out of logs and error messages.
 static QString redactUrlQueries(QString text)
 {
-    static const QRegularExpression query(QStringLiteral("\\?[^\\s\"']*"));
+    static const QRegularExpression query(QStringLiteral("\\?\\S*"));
     return text.replace(query, QStringLiteral("?<redacted>"));
 }
 
@@ -1028,7 +1028,8 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
                 NvHTTP::NvLogLevel::NVLL_NONE
             );
             
-            qDebug() << "PendingOTPPairingTask: Received response:" << pairingRequest;
+            // Not the response body: an intermediary can echo the request URI
+            qDebug() << "PendingOTPPairingTask: Received response (" << pairingRequest.size() << "bytes)";
             
             // Parse the response
             if (pairingRequest.isEmpty()) {

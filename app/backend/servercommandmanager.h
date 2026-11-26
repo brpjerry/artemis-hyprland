@@ -59,6 +59,9 @@ public:
     Q_INVOKABLE bool hasServerCommandPermission() const;
     Q_INVOKABLE void refreshCommands();
     Q_INVOKABLE void executeCommand(const QString &commandId);
+    // By position in getAvailableCommands(), the host's own index. Host command
+    // names needn't be unique, so the menu uses this.
+    Q_INVOKABLE void executeCommandAt(int index);
     Q_INVOKABLE void executeCustomCommand(const QString &command);
 
     // Command list access
@@ -85,7 +88,7 @@ private slots:
     void onCommandExecutionFinished();
 
 private:
-    void sendCommandExecution(const QString &commandId);
+    void sendCommandExecution(const QString &commandId, int index = -1);
     
     // Streaming session state checking
     bool isStreamingSessionActive() const;

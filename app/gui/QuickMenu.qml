@@ -81,7 +81,7 @@ Rectangle {
                 }
 
                 onClicked: {
-                    executeAction(model.action)
+                    executeAction(model.action, index)
                 }
 
                 contentItem: RowLayout {
@@ -268,18 +268,20 @@ Rectangle {
     function executeCurrentItem() {
         var currentItem = menuListView.model.get(menuListView.currentIndex)
         if (currentItem) {
-            executeAction(currentItem.action)
+            executeAction(currentItem.action, menuListView.currentIndex)
         }
     }
     
-    function executeAction(action) {
+    function executeAction(action, row) {
         console.log("Executing action:", action)
 
         // Dispatch by the menu the entry came from: host command names are
-        // host-defined and may match a local action's name (e.g. "quit")
+        // host-defined and may match a local action's name (e.g. "quit").
+        // Server commands go by row, which is the host's command index, since
+        // two commands can share a name.
         if (currentMenu === "server_commands") {
             if (quickMenuManager.serverCommandManager) {
-                quickMenuManager.serverCommandManager.executeCommand(action);
+                quickMenuManager.serverCommandManager.executeCommandAt(row);
             }
             closeMenuDelayed();
             return;

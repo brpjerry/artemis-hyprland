@@ -138,6 +138,31 @@ void ServerCommandManager::executeCommand(const QString &commandId)
     sendCommandExecution(commandId);
 }
 
+void ServerCommandManager::executeCommandAt(int index)
+{
+    if (index < 0 || index >= m_availableCommands.size()) {
+        emit commandFailed(QString::number(index), "Command not found");
+        return;
+    }
+
+    const QString commandId = m_availableCommands.at(index);
+    if (!m_computer || !m_http || !m_hasPermission) {
+        emit commandFailed(commandId, "Server commands not available");
+        return;
+    }
+    if (m_isExecuting) {
+        emit commandFailed(commandId, "Another command is already executing");
+        return;
+    }
+
+    m_isExecuting = true;
+    m_currentExecutingCommand = commandId;
+    emit executionStateChanged();
+
+    qDebug() << "ServerCommandManager: Executing command" << index << ":" << commandId;
+    sendCommandExecution(commandId, index);
+}
+
 void ServerCommandManager::executeCustomCommand(const QString &command)
 {
     if (command.isEmpty()) {
@@ -199,7 +224,7 @@ bool ServerCommandManager::isApolloServer() const
     return true;
 }
 
-void ServerCommandManager::sendCommandExecution(const QString &commandId)
+void ServerCommandManager::sendCommandExecution(const QString &commandId, int index)
 {
     qDebug() << "ServerCommandManager: Sending command execution:" << commandId;
 
@@ -226,9 +251,10 @@ void ServerCommandManager::sendCommandExecution(const QString &commandId)
 
     qDebug() << "ServerCommandManager: Available server commands:" << serverCommands;
 
-    // Find the command in the server's command list
-    int cmdId = -1;
-    for (int i = 0; i < serverCommands.size(); ++i) {
+    // Find the command in the server's command list (by position if given,
+    // since names needn't be unique)
+    int cmdId = (index >= 0 && index < serverCommands.size() && serverCommands[index] == commandId) ? index : -1;
+    for (int i = 0; cmdId == -1 && i < serverCommands.size(); ++i) {
         if (serverCommands[i] == commandId) {
             cmdId = i;
             break;
