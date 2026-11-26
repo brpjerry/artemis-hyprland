@@ -92,6 +92,9 @@ jobs:
             cp --remove-destination "$(readlink -f "$f")" "$f"
           done
           sha256sum -- * > SHA256SUMS
+          # sha256sum -c skips comment lines; this records the source of
+          # every rebuild, which the release notes don't
+          printf '# artemis-hyprland %s, built from commit %s\n' "$FULLVER" "$BUILT_COMMIT" >> SHA256SUMS
           ls -l
 
       # The title and notes don't name a package release, so a rebuild with a
@@ -99,7 +102,7 @@ jobs:
       - name: Write release notes
         run: |
           cat > notes.md <<EOF
-          Arch Linux packages for artemis-hyprland, built from \`$TAG\` (${BUILT_COMMIT:0:12}).
+          Arch Linux packages for artemis-hyprland \`$TAG\`. \`SHA256SUMS\` lists the current packages and the commit they were built from.
 
           Use the releases as a pacman repository (packages are unsigned):
 
@@ -109,7 +112,7 @@ jobs:
 
           Replace \`latest/download\` with \`download/$TAG\` to pin this release.
 
-          Or install directly: download the \`artemis-hyprland-<version>-x86_64.pkg.tar.zst\` asset with the highest version, then run \`sudo pacman -U\` on it.
+          To install directly, download the \`artemis-hyprland-<version>-x86_64.pkg.tar.zst\` file listed in \`SHA256SUMS\`, then run \`sudo pacman -U\` on that file.
           EOF
 
       - name: Publish
