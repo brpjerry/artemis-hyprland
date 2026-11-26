@@ -121,7 +121,8 @@ public:
             m_ServerCommandManager = nullptr;
         }
         if (m_ClipboardManager) {
-            delete m_ClipboardManager;
+            // Shared process-wide instance (also used by QML), so don't delete it
+            m_ClipboardManager->disconnect();
             m_ClipboardManager = nullptr;
         }
     };

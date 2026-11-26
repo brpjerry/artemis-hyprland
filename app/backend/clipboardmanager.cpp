@@ -2,63 +2,50 @@
 #include "nvcomputer.h"
 #include "nvhttp.h"
 #include "settings/artemissettings.h"
-#include <QGuiApplication>
-#include <QMimeData>
-#include <QDebug>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QHttpMultiPart>
+#include "SDL_compat.h"
+
 #include <QCryptographicHash>
+#include <QDebug>
+#include <QMutexLocker>
+#include <QThreadPool>
 
-// Matches Android CLIPBOARD_IDENTIFIER constant
-const QString ClipboardManager::CLIPBOARD_IDENTIFIER = "artemis_qt_clipboard_sync";
+#include <memory>
 
-// Static instance for singleton pattern
+struct ClipboardManager::UploadResult
+{
+    quint64 generation;
+    bool success;
+    QByteArray hash;
+};
+
+struct ClipboardManager::FetchResult
+{
+    quint64 generation;
+    bool force;
+    QString content;
+};
+
 ClipboardManager* ClipboardManager::s_instance = nullptr;
 
 ClipboardManager::ClipboardManager(QObject *parent)
     : QObject(parent)
-    , m_clipboard(QGuiApplication::clipboard())
     , m_computer(nullptr)
-    , m_http(nullptr)
-    , m_smartSyncEnabled(false)
-    , m_bidirectionalSync(true)
-    , m_showToast(true)
-    , m_hideContent(false)
-    , m_maxClipboardSize(DEFAULT_MAX_SIZE)
+    , m_generation(0)
     , m_enabled(false)
-    , m_connected(false)
+    , m_bidirectionalSync(true)
+    , m_maxClipboardSize(DEFAULT_MAX_SIZE)
     , m_textOnlyMode(true)
     , m_maxContentSizeMB(1)
     , m_showNotifications(true)
-    , m_syncInProgress(false)
+    , m_uploadInFlight(false)
+    , m_uploadPending(false)
+    , m_fetchInFlight(false)
 {
-    // Connect to clipboard changes (matches Android behavior)
-    connect(m_clipboard, &QClipboard::dataChanged, this, &ClipboardManager::onClipboardChanged);
-    
-    // Load settings from persistent storage
     loadSettings();
-}
-
-void ClipboardManager::loadSettings()
-{
-    auto settings = ArtemisSettings::instance();
-    
-    // Load clipboard sync settings
-    m_enabled = settings->clipboardSyncEnabled();
-    m_smartSyncEnabled = m_enabled; // Smart sync follows enabled state
-    m_bidirectionalSync = settings->clipboardSyncBidirectional();
-    m_maxClipboardSize = settings->clipboardSyncMaxSize();
-    m_maxContentSizeMB = m_maxClipboardSize / (1024 * 1024); // Convert bytes to MB
-    
-    qDebug() << "ClipboardManager: Loaded settings - enabled:" << m_enabled 
-             << "bidirectional:" << m_bidirectionalSync 
-             << "maxSize:" << m_maxClipboardSize << "bytes";
 }
 
 ClipboardManager::~ClipboardManager()
 {
-    disconnect();
     if (s_instance == this) {
         s_instance = nullptr;
     }
@@ -76,377 +63,323 @@ ClipboardManager* ClipboardManager::create(QQmlEngine *qmlEngine, QJSEngine *jsE
 {
     Q_UNUSED(qmlEngine)
     Q_UNUSED(jsEngine)
-    return instance();
+
+    // The instance is shared with the Session, so QML must not take ownership of it
+    ClipboardManager *manager = instance();
+    QQmlEngine::setObjectOwnership(manager, QQmlEngine::CppOwnership);
+    return manager;
 }
 
-void ClipboardManager::setConnection(NvComputer *computer, NvHTTP *http)
+void ClipboardManager::loadSettings()
 {
-    m_computer = computer;
-    m_http = http;
-    
-    bool wasConnected = m_connected;
-    m_connected = (computer != nullptr && http != nullptr);
-    
-    if (wasConnected != m_connected) {
-        emit connectionChanged();
+    auto settings = ArtemisSettings::instance();
+
+    m_enabled = settings->clipboardSyncEnabled();
+    m_bidirectionalSync = settings->clipboardSyncBidirectional();
+    m_maxClipboardSize = settings->clipboardSyncMaxSize();
+    m_maxContentSizeMB = m_maxClipboardSize / (1024 * 1024);
+
+    qDebug() << "ClipboardManager: Loaded settings - enabled:" << m_enabled
+             << "bidirectional:" << m_bidirectionalSync
+             << "maxSize:" << m_maxClipboardSize << "bytes";
+}
+
+bool ClipboardManager::isConnected() const
+{
+    QMutexLocker lock(&m_connectionLock);
+    return m_computer != nullptr;
+}
+
+void ClipboardManager::setConnection(NvComputer *computer)
+{
+    bool changed;
+    {
+        QMutexLocker lock(&m_connectionLock);
+        changed = (m_computer != nullptr) != (computer != nullptr);
+        m_computer = computer;
+        m_generation++;
     }
-    
-    qDebug() << "ClipboardManager: Connected to" << (computer ? computer->name : "null");
-    
-    // Check and emit Apollo support status
-    bool supported = isClipboardSyncSupported();
-    emit apolloSupportChanged(supported);
-    
-    if (supported) {
-        qDebug() << "ClipboardManager: Apollo server detected - clipboard sync available";
-    } else {
-        qDebug() << "ClipboardManager: Non-Apollo server - clipboard sync not available";
+
+    // Called before the streaming thread starts, so resetting its state here is safe
+    m_lastSyncedHash.clear();
+    m_uploadInFlight = false;
+    m_uploadPending = false;
+    m_fetchInFlight = false;
+
+    qDebug() << "ClipboardManager: Connected to" << (computer ? computer->name : QStringLiteral("null"));
+
+    if (changed) {
+        emit connectionChanged();
     }
 }
 
 void ClipboardManager::disconnect()
 {
-    m_computer = nullptr;
-    m_http = nullptr;
-    m_syncInProgress = false;
-    
-    bool wasConnected = m_connected;
-    m_connected = false;
-    
-    if (wasConnected) {
+    bool changed;
+    {
+        QMutexLocker lock(&m_connectionLock);
+        changed = m_computer != nullptr;
+        m_computer = nullptr;
+        m_generation++;
+    }
+
+    qDebug() << "ClipboardManager: Disconnected";
+
+    if (changed) {
         emit connectionChanged();
     }
-    
-    emit apolloSupportChanged(false);
-    
-    qDebug() << "ClipboardManager: Disconnected";
+}
+
+bool ClipboardManager::currentConnection(NvComputer **computer, quint64 *generation) const
+{
+    QMutexLocker lock(&m_connectionLock);
+    *computer = m_computer;
+    *generation = m_generation;
+    return m_computer != nullptr;
+}
+
+QByteArray ClipboardManager::contentHash(const QString &content)
+{
+    return QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Sha256);
+}
+
+bool ClipboardManager::postStreamEvent(int code, void *data)
+{
+    SDL_Event event = {};
+    event.type = SDL_USEREVENT;
+    event.user.code = code;
+    event.user.data1 = data;
+
+    // Fails if no stream is running (SDL events not initialized)
+    return SDL_PushEvent(&event) == 1;
 }
 
 bool ClipboardManager::sendClipboard(bool force)
 {
-    if (!m_http || !m_computer) {
-        qWarning() << "ClipboardManager: No connection available for clipboard sync";
+    if (!isConnected()) {
+        qWarning() << "ClipboardManager: No stream running, cannot upload clipboard";
         return false;
     }
-
-    if (!isClipboardSyncSupported()) {
-        qWarning() << "ClipboardManager: Clipboard sync not supported (not an Apollo server)";
-        emit clipboardSyncFailed("Clipboard sync only works with Apollo/Sunshine servers");
-        return false;
-    }
-
-    if (m_syncInProgress) {
-        qDebug() << "ClipboardManager: Sync already in progress, skipping";
-        return false;
-    }
-
-    QString clipboardText = getClipboardContent(force);
-    if (clipboardText.isNull()) {
-        qDebug() << "ClipboardManager: No clipboard content to send";
-        return false;
-    }
-
-    return sendClipboardToServer(clipboardText);
+    return postStreamEvent(SDL_CODE_CLIPBOARD_UPLOAD_REQUEST, force ? reinterpret_cast<void*>(1) : nullptr);
 }
 
 bool ClipboardManager::getClipboard()
 {
-    if (!m_http || !m_computer) {
-        qWarning() << "ClipboardManager: No connection available for clipboard sync";
+    if (!isConnected()) {
+        qWarning() << "ClipboardManager: No stream running, cannot fetch clipboard";
         return false;
     }
-
-    if (!isClipboardSyncSupported()) {
-        qWarning() << "ClipboardManager: Clipboard sync not supported (not an Apollo server)";
-        emit clipboardSyncFailed("Clipboard sync only works with Apollo/Sunshine servers");
-        return false;
-    }
-
-    if (m_syncInProgress) {
-        qDebug() << "ClipboardManager: Sync already in progress, skipping";
-        return false;
-    }
-
-    QString clipboardContent = getClipboardFromServer();
-    if (!clipboardContent.isNull()) {
-        setClipboardContent(clipboardContent);
-        return true;
-    }
-
-    return false;
+    return postStreamEvent(SDL_CODE_CLIPBOARD_FETCH_REQUEST, nullptr);
 }
 
-void ClipboardManager::enableSmartSync(bool enabled)
+void ClipboardManager::onStreamClipboardUpdated()
 {
-    m_smartSyncEnabled = enabled;
-    qDebug() << "ClipboardManager: Smart sync" << (enabled ? "enabled" : "disabled");
-}
-
-bool ClipboardManager::isSmartSyncEnabled() const
-{
-    return m_smartSyncEnabled;
-}
-
-bool ClipboardManager::isClipboardSyncSupported() const
-{
-    if (!m_computer || !m_http) {
-        return false;
-    }
-
-    // Based on Artemis Android implementation, we don't need complex Apollo detection.
-    // Just return true and let the HTTP calls succeed or fail naturally.
-    // The clipboard sync endpoints work with any server that supports them.
-    return true;
-}
-
-void ClipboardManager::onStreamStarted()
-{
-    if (m_smartSyncEnabled) {
-        qDebug() << "ClipboardManager: Stream started, uploading clipboard";
-        sendClipboard(false);
+    if (m_enabled) {
+        uploadLocalClipboard(false);
     }
 }
 
-void ClipboardManager::onStreamResumed()
+void ClipboardManager::onStreamFocusLost()
 {
-    if (m_smartSyncEnabled) {
-        qDebug() << "ClipboardManager: Stream resumed, uploading clipboard";
-        sendClipboard(false);
+    if (m_enabled && m_bidirectionalSync) {
+        requestFetch(false);
     }
 }
 
-void ClipboardManager::onFocusLost()
+void ClipboardManager::handleStreamEvent(int code, void *data)
 {
-    if (m_smartSyncEnabled && m_bidirectionalSync) {
-        qDebug() << "ClipboardManager: Focus lost, downloading clipboard";
-        getClipboard();
+    NvComputer *computer;
+    quint64 generation;
+    const bool connected = currentConnection(&computer, &generation);
+
+    switch (code) {
+    case SDL_CODE_CLIPBOARD_UPLOAD_REQUEST:
+        uploadLocalClipboard(data != nullptr);
+        break;
+
+    case SDL_CODE_CLIPBOARD_FETCH_REQUEST:
+        requestFetch(true);
+        break;
+
+    case SDL_CODE_CLIPBOARD_UPLOAD_DONE: {
+        std::unique_ptr<UploadResult> result(static_cast<UploadResult*>(data));
+        if (!connected || result->generation != generation) {
+            break; // Result from a previous session
+        }
+
+        m_uploadInFlight = false;
+        if (result->success) {
+            qInfo() << "ClipboardManager: Uploaded clipboard to host";
+        }
+        else {
+            qWarning() << "ClipboardManager: Failed to upload clipboard to host";
+            if (m_lastSyncedHash == result->hash) {
+                // Let the next clipboard update retry this content
+                m_lastSyncedHash.clear();
+            }
+        }
+
+        if (m_uploadPending) {
+            m_uploadPending = false;
+            uploadLocalClipboard(false);
+        }
+        break;
+    }
+
+    case SDL_CODE_CLIPBOARD_FETCH_DONE: {
+        std::unique_ptr<FetchResult> result(static_cast<FetchResult*>(data));
+        if (!connected || result->generation != generation) {
+            break; // Result from a previous session
+        }
+
+        m_fetchInFlight = false;
+        applyFetchedClipboard(*result);
+        break;
+    }
+
+    default:
+        SDL_assert(false);
+        break;
     }
 }
 
-void ClipboardManager::setMaxClipboardSize(int maxSize)
+void ClipboardManager::uploadLocalClipboard(bool force)
 {
-    m_maxClipboardSize = maxSize;
+    NvComputer *computer;
+    quint64 generation;
+    if (!currentConnection(&computer, &generation)) {
+        return;
+    }
+
+    if (m_uploadInFlight) {
+        // Re-read the clipboard once the current upload finishes
+        m_uploadPending = true;
+        return;
+    }
+
+    if (!SDL_HasClipboardText()) {
+        return;
+    }
+
+    // SDL reads other clients' selections with a timeout, so this can't hang
+    char *rawText = SDL_GetClipboardText();
+    if (rawText == nullptr) {
+        return;
+    }
+    const QByteArray utf8(rawText);
+    SDL_free(rawText);
+
+    if (utf8.isEmpty()) {
+        return;
+    }
+    if (utf8.size() > m_maxClipboardSize) {
+        qWarning() << "ClipboardManager: Local clipboard too large to upload:" << utf8.size() << "bytes";
+        return;
+    }
+
+    const QString text = QString::fromUtf8(utf8);
+    const QByteArray hash = contentHash(text);
+    if (!force && hash == m_lastSyncedHash) {
+        // Already in sync (including our own SDL_SetClipboardText() echo)
+        return;
+    }
+
+    // Optimistically mark as synced so repeated updates don't upload it again
+    m_lastSyncedHash = hash;
+    m_uploadInFlight = true;
+
+    qDebug() << "ClipboardManager: Uploading local clipboard to host (" << utf8.size() << "bytes)";
+
+    QThreadPool::globalInstance()->start([computer, generation, text, hash]() {
+        NvHTTP http(computer);
+        auto *result = new UploadResult{generation, http.sendClipboardContent(text), hash};
+        if (!postStreamEvent(SDL_CODE_CLIPBOARD_UPLOAD_DONE, result)) {
+            delete result;
+        }
+    });
 }
 
-int ClipboardManager::getMaxClipboardSize() const
+void ClipboardManager::requestFetch(bool force)
 {
-    return m_maxClipboardSize;
+    NvComputer *computer;
+    quint64 generation;
+    if (!currentConnection(&computer, &generation)) {
+        return;
+    }
+
+    if (m_fetchInFlight) {
+        return;
+    }
+    m_fetchInFlight = true;
+
+    qDebug() << "ClipboardManager: Fetching host clipboard";
+
+    QThreadPool::globalInstance()->start([computer, generation, force]() {
+        NvHTTP http(computer);
+        auto *result = new FetchResult{generation, force, http.getClipboardContent()};
+        if (!postStreamEvent(SDL_CODE_CLIPBOARD_FETCH_DONE, result)) {
+            delete result;
+        }
+    });
+}
+
+void ClipboardManager::applyFetchedClipboard(const FetchResult &result)
+{
+    if (result.content.isEmpty()) {
+        qDebug() << "ClipboardManager: Host clipboard is empty or unavailable";
+        return;
+    }
+
+    const QByteArray utf8 = result.content.toUtf8();
+    if (utf8.size() > m_maxClipboardSize) {
+        qWarning() << "ClipboardManager: Host clipboard too large:" << utf8.size() << "bytes";
+        return;
+    }
+
+    const QByteArray hash = contentHash(result.content);
+    if (!result.force && hash == m_lastSyncedHash) {
+        // The host hasn't changed its clipboard since the last sync. Don't
+        // replace anything copied locally since then with stale host content.
+        qDebug() << "ClipboardManager: Host clipboard unchanged since last sync";
+        return;
+    }
+
+    // SDL owns the selection on its own Wayland connection and answers
+    // requests for it from the streaming thread's event loop.
+    if (SDL_SetClipboardText(utf8.constData()) != 0) {
+        qWarning() << "ClipboardManager: Failed to set local clipboard:" << SDL_GetError();
+        return;
+    }
+
+    m_lastSyncedHash = hash;
+    qInfo() << "ClipboardManager: Set local clipboard from host (" << utf8.size() << "bytes)";
+}
+
+void ClipboardManager::setEnabled(bool enabled)
+{
+    if (m_enabled != enabled) {
+        m_enabled = enabled;
+
+        auto settings = ArtemisSettings::instance();
+        settings->setClipboardSyncEnabled(enabled);
+        settings->save();
+
+        emit enabledChanged();
+        qDebug() << "ClipboardManager: Enabled changed to" << enabled;
+    }
 }
 
 void ClipboardManager::setBidirectionalSync(bool enabled)
 {
     if (m_bidirectionalSync != enabled) {
         m_bidirectionalSync = enabled;
-        
-        // Save to persistent settings
+
         auto settings = ArtemisSettings::instance();
         settings->setClipboardSyncBidirectional(enabled);
         settings->save();
-        
+
         emit bidirectionalSyncChanged();
         qDebug() << "ClipboardManager: Bidirectional sync changed to" << enabled;
-    }
-}
-
-bool ClipboardManager::isBidirectionalSyncEnabled() const
-{
-    return m_bidirectionalSync;
-}
-
-void ClipboardManager::setShowToast(bool enabled)
-{
-    m_showToast = enabled;
-}
-
-bool ClipboardManager::shouldShowToast() const
-{
-    return m_showToast;
-}
-
-void ClipboardManager::setHideContent(bool enabled)
-{
-    m_hideContent = enabled;
-}
-
-bool ClipboardManager::shouldHideContent() const
-{
-    return m_hideContent;
-}
-
-void ClipboardManager::onClipboardChanged()
-{
-    if (m_syncInProgress) {
-        return; // Ignore changes during sync
-    }
-
-    QString content = getClipboardContent(false);
-    if (!content.isNull() && !isOwnClipboardChange(content)) {
-        emit clipboardContentChanged();
-        
-        // Auto-upload if smart sync is enabled
-        if (m_smartSyncEnabled) {
-            sendClipboard(false);
-        }
-    }
-}
-
-QString ClipboardManager::getClipboardContent(bool force)
-{
-    if (!m_clipboard->mimeData()) {
-        return QString();
-    }
-
-    const QMimeData *mimeData = m_clipboard->mimeData();
-    if (!mimeData->hasText()) {
-        return QString();
-    }
-
-    QString text = mimeData->text();
-    
-    // Check size limit
-    if (text.size() > m_maxClipboardSize) {
-        qWarning() << "ClipboardManager: Clipboard content too large:" << text.size() << "bytes";
-        return QString();
-    }
-
-    // Check if this is our own content (loop prevention)
-    if (!force && isOwnClipboardChange(text)) {
-        qDebug() << "ClipboardManager: Ignoring own clipboard change";
-        return QString();
-    }
-
-    return text;
-}
-
-void ClipboardManager::setClipboardContent(const QString &content)
-{
-    if (content.isEmpty()) {
-        return;
-    }
-
-    m_syncInProgress = true;
-    
-    // Mark as our own content to prevent loops
-    markAsOwnContent(content);
-    
-    // Set clipboard content
-    QMimeData *mimeData = new QMimeData();
-    mimeData->setText(content);
-    
-    if (m_hideContent) {
-        // Mark as sensitive (matches Android behavior)
-        mimeData->setData("application/x-qt-windows-mime;value=\"Clipboard Viewer Format\"", QByteArray());
-    }
-    
-    m_clipboard->setMimeData(mimeData);
-    m_lastReceivedContent = content;
-    
-    m_syncInProgress = false;
-    
-    qDebug() << "ClipboardManager: Set clipboard content (" << content.size() << " chars)";
-}
-
-bool ClipboardManager::isOwnClipboardChange(const QString &content)
-{
-    QString hash = generateContentHash(content);
-    return m_ownContentHashes.contains(hash) || content == m_lastReceivedContent;
-}
-
-void ClipboardManager::markAsOwnContent(const QString &content)
-{
-    QString hash = generateContentHash(content);
-    m_ownContentHashes.append(hash);
-    
-    // Keep only last 10 hashes to prevent memory growth
-    if (m_ownContentHashes.size() > 10) {
-        m_ownContentHashes.removeFirst();
-    }
-}
-
-QString ClipboardManager::generateContentHash(const QString &content)
-{
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(content.toUtf8());
-    return hash.result().toHex();
-}
-
-bool ClipboardManager::sendClipboardToServer(const QString &content)
-{
-    if (!m_http || content.isEmpty()) {
-        return false;
-    }
-
-    emit clipboardSyncStarted();
-    m_syncInProgress = true;
-
-    // Use the new NvHTTP clipboard method
-    bool success = m_http->sendClipboardContent(content);
-    
-    m_syncInProgress = false;
-    
-    if (success) {
-        markAsOwnContent(content);
-        emit clipboardSyncCompleted();
-        
-        if (m_showToast) {
-            emit showToast("Clipboard uploaded to server");
-        }
-        
-        qDebug() << "ClipboardManager: Successfully sent clipboard to server";
-        return true;
-    } else {
-        emit clipboardSyncFailed("Failed to send clipboard to server");
-        qWarning() << "ClipboardManager: Failed to send clipboard to server";
-        return false;
-    }
-}
-
-QString ClipboardManager::getClipboardFromServer()
-{
-    if (!m_http) {
-        return QString();
-    }
-
-    emit clipboardSyncStarted();
-    m_syncInProgress = true;
-
-    // Use the new NvHTTP clipboard method
-    QString content = m_http->getClipboardContent();
-    
-    m_syncInProgress = false;
-    
-    if (!content.isEmpty()) {
-        emit clipboardSyncCompleted();
-        
-        if (m_showToast) {
-            emit showToast("Clipboard downloaded from server");
-        }
-        
-        qDebug() << "ClipboardManager: Successfully received clipboard from server";
-        return content;
-    } else {
-        emit clipboardSyncFailed("Failed to get clipboard from server");
-        qWarning() << "ClipboardManager: Failed to get clipboard from server";
-        return QString();
-    }
-}
-
-// Property setters
-void ClipboardManager::setEnabled(bool enabled)
-{
-    if (m_enabled != enabled) {
-        m_enabled = enabled;
-        
-        // Enable/disable smart sync when clipboard sync is enabled/disabled
-        enableSmartSync(enabled);
-        
-        // Save to persistent settings
-        auto settings = ArtemisSettings::instance();
-        settings->setClipboardSyncEnabled(enabled);
-        settings->save();
-        
-        emit enabledChanged();
-        qDebug() << "ClipboardManager: Enabled changed to" << enabled << "(smart sync:" << (enabled ? "enabled" : "disabled") << ")";
     }
 }
 
@@ -463,13 +396,12 @@ void ClipboardManager::setMaxContentSizeMB(int sizeMB)
 {
     if (m_maxContentSizeMB != sizeMB) {
         m_maxContentSizeMB = sizeMB;
-        m_maxClipboardSize = sizeMB * 1024 * 1024; // Convert to bytes
-        
-        // Save to persistent settings
+        m_maxClipboardSize = sizeMB * 1024 * 1024;
+
         auto settings = ArtemisSettings::instance();
         settings->setClipboardSyncMaxSize(m_maxClipboardSize);
         settings->save();
-        
+
         emit maxContentSizeMBChanged();
         qDebug() << "ClipboardManager: Max content size changed to" << sizeMB << "MB";
     }
@@ -479,7 +411,6 @@ void ClipboardManager::setShowNotifications(bool show)
 {
     if (m_showNotifications != show) {
         m_showNotifications = show;
-        m_showToast = show; // Sync with internal setting
         emit showNotificationsChanged();
         qDebug() << "ClipboardManager: Show notifications changed to" << show;
     }

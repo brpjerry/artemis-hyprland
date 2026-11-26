@@ -1030,8 +1030,8 @@ bool Session::initialize()
         NvHTTP* httpClient = new NvHTTP(m_Computer);
         m_ServerCommandManager->setConnection(m_Computer, httpClient);
         
-        // Set up the ClipboardManager with the same HTTP client
-        m_ClipboardManager->setConnection(m_Computer, httpClient);
+        // ClipboardManager makes its own HTTP requests off the streaming thread
+        m_ClipboardManager->setConnection(m_Computer);
         
         // Connect the ServerCommandManager to the QuickMenuManager
         m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
@@ -2243,6 +2243,12 @@ void Session::execInternal()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+            case SDL_CODE_CLIPBOARD_UPLOAD_REQUEST:
+            case SDL_CODE_CLIPBOARD_FETCH_REQUEST:
+            case SDL_CODE_CLIPBOARD_UPLOAD_DONE:
+            case SDL_CODE_CLIPBOARD_FETCH_DONE:
+                m_ClipboardManager->handleStreamEvent(event.user.code, event.user.data1);
+                break;
             default:
                 SDL_assert(false);
             }
@@ -2256,11 +2262,9 @@ void Session::execInternal()
                     m_AudioMuted = true;
                 }
                 m_InputHandler->notifyFocusLost();
-                
-                // Trigger clipboard sync from server when focus is lost
-                if (m_ClipboardManager) {
-                    m_ClipboardManager->onFocusLost();
-                }
+
+                // Pull the host clipboard so it can be pasted locally
+                m_ClipboardManager->onStreamFocusLost();
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
                 if (m_Preferences->muteOnFocusLoss) {
@@ -2455,6 +2459,12 @@ void Session::execInternal()
             m_InputHandler->updatePointerRegionLock();
 
             SDL_AtomicUnlock(&m_DecoderLock);
+            break;
+
+        case SDL_CLIPBOARDUPDATE:
+            // The local clipboard changed, or the compositor re-sent it when
+            // the stream window gained focus
+            m_ClipboardManager->onStreamClipboardUpdated();
             break;
 
         case SDL_KEYUP:
