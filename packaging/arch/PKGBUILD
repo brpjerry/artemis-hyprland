@@ -1,0 +1,96 @@
+# Arch Linux package for artemis-hyprland, built from the source tree this
+# PKGBUILD lives in (not from a fresh clone). CI builds it through
+# build-in-container.sh; see README.md for local builds.
+
+pkgname=artemis-hyprland
+pkgver=0.6.7
+pkgrel=1
+pkgdesc="Artemis GameStream client (Moonlight fork with Apollo extras), with Wayland and Hyprland fixes"
+arch=('x86_64')
+url="https://github.com/brpjerry/artemis-hyprland"
+license=('GPL-3.0-or-later')
+depends=(
+  'ffmpeg'
+  'hicolor-icon-theme'
+  'libdrm'
+  'libglvnd'
+  'libplacebo'
+  'libva'
+  'libvdpau'
+  'libx11'
+  'libxkbcommon'
+  'openssl'
+  'opus'
+  'qt6-base'
+  'qt6-declarative'
+  'qt6-svg'
+  'sdl2'
+  'sdl2_ttf'
+  'vulkan-icd-loader'
+  'wayland'
+  # Library sonames: makepkg turns these into versioned dependencies
+  # (e.g. libavcodec.so=63-64) from what the binary links, so pacman refuses
+  # a library update that would break the installed client instead of
+  # leaving it failing with "error while loading shared libraries".
+  'libavcodec.so'
+  'libavformat.so'
+  'libavutil.so'
+  'libcrypto.so'
+  'libEGL.so'
+  'libGLX.so'
+  'libOpenGL.so'
+  'libopus.so'
+  'libplacebo.so'
+  'libssl.so'
+  'libswscale.so'
+  'libva.so'
+  'libva-drm.so'
+  'libva-wayland.so'
+  'libva-x11.so'
+  'libwayland-client.so'
+)
+makedepends=(
+  'ffnvcodec-headers'  # CUDA renderer (NVDEC on NVIDIA + Wayland)
+  'git'
+  'qt6-tools'
+  'vulkan-headers'
+  'wayland-protocols'
+)
+optdepends=(
+  'intel-media-driver: VA-API hardware decoding on Broadwell and newer Intel GPUs'
+  'libva-intel-driver: VA-API hardware decoding on older Intel GPUs'
+  'libva-mesa-driver: VA-API hardware decoding on AMD GPUs'
+  'libva-nvidia-driver: VA-API hardware decoding on NVIDIA GPUs'
+)
+provides=('artemis-qt')
+conflicts=('artemis-qt' 'artemis-qt-git')
+
+_srctree() {
+  realpath "$startdir/../.."
+}
+
+# ARTEMIS_PKGVER overrides the version (release builds use the tag). Otherwise
+# it's app/version.txt plus the commit count and hash, so CI builds sort in
+# commit order and below the next tagged release.
+pkgver() {
+  cd "$(_srctree)"
+  if [[ -n ${ARTEMIS_PKGVER:-} ]]; then
+    printf '%s\n' "$ARTEMIS_PKGVER"
+  else
+    printf '%s.r%s.g%s\n' "$(tr -d '\r\n' < app/version.txt)" \
+      "$(git rev-list --count HEAD)" "$(git rev-parse --short=8 HEAD)"
+  fi
+}
+
+build() {
+  # Out-of-tree build so the source tree stays clean
+  mkdir -p build
+  cd build
+  qmake6 "$(_srctree)/artemis.pro" PREFIX=/usr CONFIG+=release "QMAKE_CXXFLAGS+=-fPIC"
+  make
+}
+
+package() {
+  cd build
+  make INSTALL_ROOT="$pkgdir" install
+}

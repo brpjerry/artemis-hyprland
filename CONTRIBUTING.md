@@ -86,17 +86,13 @@ git push origin feature/clipboard-sync
 
 ## CI/CD Integration
 
-### Automated Testing
-- **Test workflow** runs on pushes to `develop` and all PRs
-- **Build workflow** runs on pushes to `main` and release creation
-- All platforms (Windows, macOS, Linux, Steam Deck) are tested
-
-### Build Artifacts
-- **Steam Deck**: Optimized build with embedded config
-- **Windows**: x64 and ARM64 portable packages
-- **macOS**: Universal DMG
-- **Linux**: AppImage for broad compatibility
-- **Steam Link**: Dedicated build
+- **Arch Linux Package** (`arch-package.yml`) builds the x86_64 pacman
+  package on every pull request and push to `main`, and uploads it as a
+  workflow artifact.
+- **Arch Linux Release** (`release-arch.yml`) publishes the package to the
+  GitHub release of each `v*` tag.
+- Other platforms are not built in CI; build and test them locally (see
+  `docs/BUILD_SYSTEM.md`).
 
 ## Code Standards
 
@@ -137,7 +133,7 @@ docs(readme): update installation instructions
 
 ### Review Phase
 1. **Self-review** - Check your own code before submitting
-2. **Test build** - Ensure CI passes on all platforms
+2. **Test build** - Ensure the Arch Linux package CI passes
 3. **Update docs** - Include user-facing documentation
 4. **Respond to feedback** - Address review comments promptly
 

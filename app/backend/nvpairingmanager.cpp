@@ -124,7 +124,7 @@ NvPairingManager::getSignatureFromPemCert(const QByteArray& certificate)
     X509_get0_signature(&asnSignature, NULL, cert);
 #endif
 
-    QByteArray signature(reinterpret_cast<char*>(asnSignature->data), asnSignature->length);
+    QByteArray signature(reinterpret_cast<const char*>(ASN1_STRING_get0_data(asnSignature)), ASN1_STRING_length(asnSignature));
 
     X509_free(cert);
 
@@ -278,7 +278,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
 #endif
 
     challengeResponse.append(challengeResponseData.data() + hashLength, 16);
-    challengeResponse.append(reinterpret_cast<char*>(asnSignature->data), asnSignature->length);
+    challengeResponse.append(reinterpret_cast<const char*>(ASN1_STRING_get0_data(asnSignature)), ASN1_STRING_length(asnSignature));
     challengeResponse.append(clientSecretData);
 
     QByteArray paddedHash = QCryptographicHash::hash(challengeResponse, hashAlgo);

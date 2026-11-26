@@ -1,0 +1,88 @@
+name: Arch Linux Package
+
+# Builds the pacman package from packaging/arch in a clean archlinux container
+# and uploads it as an artifact. Runs as CI on pushes to main and on pull
+# requests, is called by release-arch.yml for releases, and can be run by hand
+# on any branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build (default the commit that triggered the caller)
+        type: string
+        default: ''
+      pkgver:
+        description: Package version (default app/version.txt + git revision)
+        type: string
+        default: ''
+      pkgrel:
+        description: Package release number
+        type: string
+        default: '1'
+    outputs:
+      pkgver:
+        description: Full package version (pkgver-pkgrel)
+        value: ${{ jobs.build.outputs.pkgver }}
+      artifact:
+        description: Name of the uploaded artifact holding the packages
+        value: ${{ jobs.build.outputs.artifact }}
+      commit:
+        description: Commit the packages were built from
+        value: ${{ jobs.build.outputs.commit }}
+  workflow_dispatch:
+    inputs:
+      pkgver:
+        description: Package version (leave empty for app/version.txt + git revision)
+        type: string
+        default: ''
+      pkgrel:
+        description: Package release number
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build pacman package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    # A new push to a pull request cancels its older build; every other run
+    # (main, releases, manual) gets a group of its own.
+    concurrency:
+      group: arch-package-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
+    outputs:
+      pkgver: ${{ steps.build.outputs.pkgver }}
+      artifact: ${{ steps.build.outputs.artifact }}
+      commit: ${{ steps.checkout.outputs.commit }}
+    steps:
+      # actions/checkout needs git in the container to produce a real clone
+      - name: Install git
+        run: pacman -Syu --noconfirm --needed git
+
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0  # pkgver counts commits
+
+      - name: Build package
+        id: build
+        env:
+          ARTEMIS_PKGVER: ${{ inputs.pkgver }}
+          ARTEMIS_PKGREL: ${{ inputs.pkgrel }}
+        run: packaging/arch/build-in-container.sh dist
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.artifact }}
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: error

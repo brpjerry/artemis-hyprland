@@ -8,7 +8,8 @@ Artemis Qt now includes native support for Windows ARM64 devices, including:
 
 ## Build Artifacts
 
-The CI/CD system now automatically generates ARM64 builds alongside x64 builds:
+CI no longer builds Windows (it only builds the Arch Linux x86_64 package).
+The upstream CI generated these ARM64 builds alongside the x64 ones:
 
 - `artemis-windows-arm64-installer-{version}.msi` - MSI installer for ARM64
 - `artemis-windows-arm64-portable-{version}.zip` - Portable ZIP for ARM64

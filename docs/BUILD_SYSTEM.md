@@ -98,19 +98,16 @@ make -j$(nproc)
 
 ## CI/CD Pipeline
 
-The GitHub Actions workflow (`dev-build.yml`) automatically:
+GitHub Actions builds only the Arch Linux x86_64 package (see
+[`packaging/arch/README.md`](../packaging/arch/README.md)):
 
-1. **Detects platforms** and builds appropriate artifacts
-2. **Generates universal installers** where supported  
-3. **Cross-compiles** for additional architectures
-4. **Packages professionally** with proper metadata
-5. **Creates releases** with comprehensive artifact sets
+- `arch-package.yml` builds it on pushes to `main`, on pull requests and on
+  demand, and uploads it as a workflow artifact.
+- `release-arch.yml` publishes it, with a pacman repository database, to the
+  GitHub release of each `v*` tag.
 
-### Build Matrix
-- **Windows**: x64, ARM64, Universal Bundle
-- **macOS**: Universal (x86_64 + arm64)  
-- **Linux**: x86_64, ARM64 (Raspberry Pi), AppImage, Flatpak
-- **Steam**: Steam Deck optimized
+The other platforms above are not built in CI; their instructions are kept
+for local builds.
 
 ## Comparison with Moonlight-Qt
 
@@ -123,7 +120,6 @@ The GitHub Actions workflow (`dev-build.yml`) automatically:
 ### What We've Enhanced
 🚀 **Raspberry Pi ARM64** - Dedicated cross-compiled builds  
 🚀 **Steam Deck optimization** - Specialized gaming build  
-🚀 **Comprehensive CI/CD** - Automated universal builds  
 🚀 **Better documentation** - Clear architecture support matrix
 
 ## Requirements

@@ -1,0 +1,155 @@
+name: Arch Linux Release
+
+# Pushing a tag like v0.6.8 builds the pacman package with that version and
+# publishes it to the tag's GitHub release, together with SHA256SUMS and a
+# pacman repository database, so the release can be used as a pacman Server.
+# Run it by hand to rebuild an existing tag (e.g. with a higher pkgrel).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v0.6.8
+        type: string
+        required: true
+      pkgrel:
+        description: Package release number, higher than any already published for the tag
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-arch-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      pkgver: ${{ steps.version.outputs.pkgver }}
+    steps:
+      - name: Derive package version
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          pkgver=${TAG#v}
+          # pacman versions can't contain '-', ':' or whitespace, and GitHub
+          # renames release assets with other special characters such as '+',
+          # which would break the file names the pacman database lists
+          if [[ $TAG != v* || ! $pkgver =~ ^[0-9][A-Za-z0-9._]*$ ]]; then
+            echo "::error::Tag '$TAG' must be v<version>, using only letters, digits, '.' and '_' (e.g. v0.6.8)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: version
+    uses: ./.github/workflows/arch-package.yml
+    with:
+      # A tag push builds the commit the tag pointed at when it was pushed
+      ref: ${{ github.event_name == 'push' && github.sha || format('refs/tags/{0}', needs.version.outputs.tag) }}
+      pkgver: ${{ needs.version.outputs.pkgver }}
+      pkgrel: ${{ inputs.pkgrel || '1' }}
+
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    container: archlinux:base  # provides repo-add
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+      FULLVER: ${{ needs.build.outputs.pkgver }}
+      BUILT_COMMIT: ${{ needs.build.outputs.commit }}
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed github-cli
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Create pacman repository database
+        working-directory: dist
+        run: |
+          repo-add artemis-hyprland.db.tar.gz ./*.pkg.tar.zst
+          # repo-add makes .db/.files symlinks; release assets must be real files
+          for f in artemis-hyprland.db artemis-hyprland.files; do
+            cp --remove-destination "$(readlink -f "$f")" "$f"
+          done
+          sha256sum -- * > SHA256SUMS
+          # sha256sum -c skips comment lines; this records the source of
+          # every rebuild, which the release notes don't
+          printf '# artemis-hyprland %s, built from commit %s\n' "$FULLVER" "$BUILT_COMMIT" >> SHA256SUMS
+          ls -l
+
+      # The title and notes don't name a package release, so a rebuild with a
+      # higher pkgrel leaves them, and anything added to them, unchanged.
+      - name: Write release notes
+        run: |
+          cat > notes.md <<EOF
+          Arch Linux packages for artemis-hyprland \`$TAG\`. \`SHA256SUMS\` lists the current packages and the commit they were built from.
+
+          Use the releases as a pacman repository (packages are unsigned):
+
+              [artemis-hyprland]
+              SigLevel = Optional
+              Server = https://github.com/$GH_REPO/releases/latest/download
+
+          Replace \`latest/download\` with \`download/$TAG\` to pin this release.
+
+          To install directly, download the \`artemis-hyprland-<version>-x86_64.pkg.tar.zst\` file listed in \`SHA256SUMS\`, then run \`sudo pacman -U\` on that file.
+          EOF
+
+      - name: Publish
+        run: |
+          # The tag must still point at the commit that was built. This runs
+          # right before uploading to keep the window for a moved tag small.
+          obj=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          while [[ $obj == "tag "* ]]; do  # annotated tag: follow it to the commit
+            obj=$(gh api "repos/$GH_REPO/git/tags/${obj#tag }" --jq '.object.type + " " + .object.sha')
+          done
+          if [[ $obj != "commit $BUILT_COMMIT" ]]; then
+            echo "::error::Tag $TAG points at '$obj', but the package was built from $BUILT_COMMIT"
+            exit 1
+          fi
+
+          # One release lookup decides what follows. Any error other than a
+          # missing release stops the job instead of skipping the checks.
+          if gh release view "$TAG" --json assets --jq '.assets[].name' > published-assets 2> view-error; then
+            # Rebuild: it must be newer than every package the release already
+            # has, or pacman won't see it as an upgrade
+            sed -n 's/^artemis-hyprland-\([0-9].*\)-x86_64\.pkg\.tar\.zst$/\1/p' published-assets > published-versions
+            while read -r version; do
+              if (( $(vercmp "$FULLVER" "$version") <= 0 )); then
+                echo "::error::$TAG already has package $version; run this workflow by hand with a higher pkgrel"
+                exit 1
+              fi
+            done < published-versions
+            # Upload the packages before the database that lists them, and keep
+            # the older packages for clients that still have the old database
+            gh release upload "$TAG" dist/*.pkg.tar.zst
+            gh release upload "$TAG" --clobber \
+              dist/artemis-hyprland.db* dist/artemis-hyprland.files* dist/SHA256SUMS
+          elif grep -qFx 'release not found' view-error; then
+            # gh keeps the release a draft until all assets are uploaded
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "artemis-hyprland $TAG" --notes-file notes.md
+          else
+            cat view-error >&2
+            exit 1
+          fi
