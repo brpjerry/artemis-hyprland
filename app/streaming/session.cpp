@@ -1029,10 +1029,7 @@ bool Session::initialize()
         // Set up the ServerCommandManager with the computer and HTTP client
         NvHTTP* httpClient = new NvHTTP(m_Computer);
         m_ServerCommandManager->setConnection(m_Computer, httpClient);
-        
-        // ClipboardManager makes its own HTTP requests off the streaming thread
-        m_ClipboardManager->setConnection(m_Computer);
-        
+
         // Connect the ServerCommandManager to the QuickMenuManager
         m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
         
@@ -1878,6 +1875,10 @@ void Session::exec(QWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
 
+    // The Qt event loop won't run during the stream, so Qt can't keep serving
+    // the clipboard. Let ClipboardManager move it to SDL for the stream.
+    m_ClipboardManager->prepareForStream();
+
     // Use a separate thread for the streaming session on X11 or Wayland
     // to ensure we don't stomp on Qt's GL context. This breaks when using
     // the Qt EGLFS backend, so we will restrict this to X11
@@ -2167,6 +2168,9 @@ void Session::execInternal()
     // Toggle the stats overlay if requested by the user
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
 
+    // Clipboard sync runs on this event loop, from here until DispatchDeferredCleanup
+    m_ClipboardManager->setConnection(m_Computer);
+
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
@@ -2243,11 +2247,8 @@ void Session::execInternal()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
-            case SDL_CODE_CLIPBOARD_UPLOAD_REQUEST:
-            case SDL_CODE_CLIPBOARD_FETCH_REQUEST:
-            case SDL_CODE_CLIPBOARD_UPLOAD_DONE:
-            case SDL_CODE_CLIPBOARD_FETCH_DONE:
-                m_ClipboardManager->handleStreamEvent(event.user.code, event.user.data1);
+            case SDL_CODE_CLIPBOARD_WAKE:
+                m_ClipboardManager->processPendingWork();
                 break;
             default:
                 SDL_assert(false);
@@ -2270,6 +2271,9 @@ void Session::execInternal()
                 if (m_Preferences->muteOnFocusLoss) {
                     m_AudioMuted = false;
                 }
+
+                // Pick up clipboard work whose wakeup event was lost
+                m_ClipboardManager->processPendingWork();
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
@@ -2522,6 +2526,10 @@ void Session::execInternal()
     }
 
 DispatchDeferredCleanup:
+    // Stop clipboard sync while the window and SDL video are still alive, so
+    // the clipboard can be handed over to Qt
+    m_ClipboardManager->disconnect();
+
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.
     m_InputHandler->setCaptureActive(false);

@@ -4,26 +4,15 @@
 #include "settings/artemissettings.h"
 #include "SDL_compat.h"
 
+#include <QClipboard>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDebug>
+#include <QGuiApplication>
+#include <QMetaObject>
 #include <QMutexLocker>
+#include <QReadLocker>
 #include <QThreadPool>
-
-#include <memory>
-
-struct ClipboardManager::UploadResult
-{
-    quint64 generation;
-    bool success;
-    QByteArray hash;
-};
-
-struct ClipboardManager::FetchResult
-{
-    quint64 generation;
-    bool force;
-    QString content;
-};
 
 ClipboardManager* ClipboardManager::s_instance = nullptr;
 
@@ -31,17 +20,22 @@ ClipboardManager::ClipboardManager(QObject *parent)
     : QObject(parent)
     , m_computer(nullptr)
     , m_generation(0)
+    , m_httpWorkerRunning(false)
+    , m_shuttingDown(false)
+    , m_wakePosted(false)
     , m_enabled(false)
     , m_bidirectionalSync(true)
     , m_maxClipboardSize(DEFAULT_MAX_SIZE)
     , m_textOnlyMode(true)
     , m_maxContentSizeMB(1)
-    , m_showNotifications(true)
-    , m_uploadInFlight(false)
-    , m_uploadPending(false)
-    , m_fetchInFlight(false)
 {
+    resetStreamState();
     loadSettings();
+
+    if (QCoreApplication::instance()) {
+        connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                this, &ClipboardManager::onAboutToQuit);
+    }
 }
 
 ClipboardManager::~ClipboardManager()
@@ -84,44 +78,150 @@ void ClipboardManager::loadSettings()
              << "maxSize:" << m_maxClipboardSize << "bytes";
 }
 
+void ClipboardManager::onAboutToQuit()
+{
+    // HTTP jobs run on the global thread pool, which main() waits on (with a
+    // timeout) after the event loop exits. Don't start anything new from here
+    // on. A request already running is aborted by NvHTTP's own aboutToQuit
+    // handling, and is bounded by its request timeout regardless.
+    QMutexLocker lock(&m_lock);
+    m_shuttingDown = true;
+    m_httpQueue.clear();
+}
+
 bool ClipboardManager::isConnected() const
 {
-    QMutexLocker lock(&m_connectionLock);
+    QMutexLocker lock(&m_lock);
     return m_computer != nullptr;
+}
+
+void ClipboardManager::resetStreamState()
+{
+    m_lastSyncedHash.clear();
+    m_textSetThroughSdl.clear();
+    m_uploadInFlight = false;
+    m_pendingUploadText.clear();
+    m_pendingUploadForced = false;
+    m_fetchInFlight = false;
+    m_fetchSuperseded = false;
+    m_pendingFetch = PendingFetch::None;
+}
+
+void ClipboardManager::prepareForStream()
+{
+    // Once the stream runs, nothing dispatches Qt's display connection until
+    // it ends, so Qt can't serve a selection it owns: every clipboard reader
+    // on the system would block on it, and SDL's reads from the stream would
+    // stall for SDL's read timeout. Qt owns the selection after
+    // handOffLocalClipboard() at the end of the previous stream, or after a
+    // copy in Artemis's own UI. Note its text while the Qt event loop still
+    // runs, and let setConnection() take it over through SDL. If the stream
+    // never gets that far, Qt simply keeps the selection.
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance()) == nullptr) {
+        return;
+    }
+
+    // Keep the note current while the Qt event loop still runs during stream
+    // startup, so a copy made elsewhere in the meantime isn't overwritten
+    connect(QGuiApplication::clipboard(), &QClipboard::changed,
+            this, &ClipboardManager::onQtClipboardChanged, Qt::UniqueConnection);
+    onQtClipboardChanged(QClipboard::Clipboard);
+}
+
+void ClipboardManager::onQtClipboardChanged(QClipboard::Mode mode)
+{
+    if (mode != QClipboard::Clipboard) {
+        return;
+    }
+
+    // QClipboard returns its own data without a round trip while it owns the
+    // selection, and nothing is read otherwise
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    const QString text = clipboard->ownsClipboard() ? clipboard->text() : QString();
+
+    QMutexLocker lock(&m_lock);
+    m_textFromQt = text;
 }
 
 void ClipboardManager::setConnection(NvComputer *computer)
 {
+    // Start the new session with fresh state before its SDL event loop runs
+    resetStreamState();
+
     bool changed;
+    QString textFromQt;
     {
-        QMutexLocker lock(&m_connectionLock);
+        QMutexLocker lock(&m_lock);
         changed = (m_computer != nullptr) != (computer != nullptr);
         m_computer = computer;
         m_generation++;
+
+        // Nothing queued so far belongs to this session. A request from an
+        // older session that is already running finishes first, since the
+        // HTTP queue runs one request at a time.
+        m_pending = PendingWork();
+        m_httpQueue.clear();
+
+        textFromQt.swap(m_textFromQt);
     }
 
-    // Called before the streaming thread starts, so resetting its state here is safe
-    m_lastSyncedHash.clear();
-    m_uploadInFlight = false;
-    m_uploadPending = false;
-    m_fetchInFlight = false;
+    // A wakeup still in flight from an older session may never be delivered
+    m_wakePosted = false;
 
-    qDebug() << "ClipboardManager: Connected to" << (computer ? computer->name : QStringLiteral("null"));
+    if (!textFromQt.isEmpty()) {
+        takeOverQtClipboard(textFromQt);
+    }
+
+    if (computer) {
+        QReadLocker lock(&computer->lock);
+        qDebug() << "ClipboardManager: Connected to" << computer->name;
+    }
 
     if (changed) {
         emit connectionChanged();
     }
 }
 
+void ClipboardManager::takeOverQtClipboard(const QString &text)
+{
+    // See prepareForStream(). Setting the same text through SDL moves the
+    // selection to SDL's display connection, which this thread pumps for the
+    // rest of the stream. disconnect() hands it back to Qt afterwards.
+    const QByteArray utf8 = text.toUtf8();
+    if (utf8.contains('\0')) {
+        return;
+    }
+
+    if (SDL_SetClipboardText(utf8.constData()) != 0) {
+        qWarning() << "ClipboardManager: Failed to take over the clipboard from Qt:" << SDL_GetError();
+        return;
+    }
+
+    m_textSetThroughSdl = utf8;
+    qDebug() << "ClipboardManager: Took over the clipboard from Qt for the stream";
+}
+
 void ClipboardManager::disconnect()
 {
+    // Must run before the stream's SDL window and video subsystem go away
+    handOffLocalClipboard();
+    resetStreamState();
+
     bool changed;
     {
-        QMutexLocker lock(&m_connectionLock);
+        QMutexLocker lock(&m_lock);
         changed = m_computer != nullptr;
         m_computer = nullptr;
         m_generation++;
+
+        // Drop this session's results, manual requests and queued HTTP jobs.
+        // A request already running can't be recalled, but its result is
+        // discarded because the generation changed.
+        m_pending = PendingWork();
+        m_httpQueue.clear();
     }
+
+    m_wakePosted = false;
 
     qDebug() << "ClipboardManager: Disconnected";
 
@@ -130,12 +230,72 @@ void ClipboardManager::disconnect()
     }
 }
 
-bool ClipboardManager::currentConnection(NvComputer **computer, quint64 *generation) const
+void ClipboardManager::handOffLocalClipboard()
 {
-    QMutexLocker lock(&m_connectionLock);
-    *computer = m_computer;
-    *generation = m_generation;
-    return m_computer != nullptr;
+    // While SDL owns the selection with text we set (from the host, or taken
+    // over from Qt), it answers other clients' requests for it
+    // (wl_data_source.send on Wayland, SelectionRequest on X11) only while
+    // something pumps SDL events. Once the stream's event loop exits, nothing
+    // reliably does: the GUI pumps SDL only for gamepad navigation while its
+    // own window is focused, and SDL video can stay initialized after the
+    // stream. Pasting that text into another application would then block the
+    // reader on a pipe nobody writes.
+    //
+    // So if the local clipboard still holds the text we set, give the same
+    // text to QClipboard. The call is queued to the GUI thread and runs once
+    // the Qt event loop resumes after the stream. Qt keeps pumping its own
+    // display connection, so it can serve the selection for as long as it
+    // owns it (prepareForStream() moves it back to SDL for the next stream).
+    // If the user copied something else since, the clipboard isn't ours to
+    // pass on and is left alone.
+    if (m_textSetThroughSdl.isEmpty() || QCoreApplication::instance() == nullptr) {
+        return;
+    }
+
+    // Returns our own copy without a round trip while SDL still owns the
+    // selection
+    char *rawText = SDL_GetClipboardText();
+    const QByteArray current(rawText ? rawText : "");
+    SDL_free(rawText);
+
+    if (current != m_textSetThroughSdl) {
+        qDebug() << "ClipboardManager: Local clipboard changed since it was set, not handing it over to Qt";
+        return;
+    }
+
+    const QString text = QString::fromUtf8(current);
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [text]() {
+        QGuiApplication::clipboard()->setText(text);
+    }, Qt::QueuedConnection);
+
+    qDebug() << "ClipboardManager: Handing the clipboard over to Qt";
+}
+
+bool ClipboardManager::currentEndpoint(Endpoint *endpoint, quint64 *generation) const
+{
+    NvComputer *computer;
+    {
+        QMutexLocker lock(&m_lock);
+        computer = m_computer;
+        *generation = m_generation;
+    }
+    if (computer == nullptr) {
+        return false;
+    }
+
+    // The Session keeps its NvComputer alive until after disconnect(), which
+    // runs on this thread, so it's safe to read here. Polling may update these
+    // fields from another thread, so take the host's lock.
+    QReadLocker lock(&computer->lock);
+    endpoint->address = computer->activeAddress;
+    endpoint->httpsPort = computer->activeHttpsPort;
+    endpoint->serverCert = computer->serverCert;
+
+    if (endpoint->address.isNull()) {
+        qWarning() << "ClipboardManager: Host has no active address";
+        return false;
+    }
+    return true;
 }
 
 QByteArray ClipboardManager::contentHash(const QString &content)
@@ -143,37 +303,93 @@ QByteArray ClipboardManager::contentHash(const QString &content)
     return QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Sha256);
 }
 
-bool ClipboardManager::postStreamEvent(int code, void *data)
+void ClipboardManager::wakeStream()
 {
+    // One outstanding wakeup is enough: processPendingWork() takes everything
+    if (m_wakePosted.exchange(true)) {
+        return;
+    }
+
     SDL_Event event = {};
     event.type = SDL_USEREVENT;
-    event.user.code = code;
-    event.user.data1 = data;
+    event.user.code = SDL_CODE_CLIPBOARD_WAKE;
 
-    // Fails if no stream is running (SDL events not initialized)
-    return SDL_PushEvent(&event) == 1;
+    if (SDL_PushEvent(&event) != 1) {
+        // The work stays stored and is picked up on the next clipboard or
+        // focus event, or by the next successful wakeup
+        m_wakePosted = false;
+    }
 }
 
 bool ClipboardManager::sendClipboard(bool force)
 {
-    if (!isConnected()) {
-        qWarning() << "ClipboardManager: No stream running, cannot upload clipboard";
-        return false;
+    {
+        QMutexLocker lock(&m_lock);
+        if (m_computer == nullptr) {
+            qWarning() << "ClipboardManager: No stream running, cannot upload clipboard";
+            return false;
+        }
+        m_pending.manualUpload = true;
+        m_pending.manualUploadForced |= force;
     }
-    return postStreamEvent(SDL_CODE_CLIPBOARD_UPLOAD_REQUEST, force ? reinterpret_cast<void*>(1) : nullptr);
+
+    wakeStream();
+    return true;
 }
 
 bool ClipboardManager::getClipboard()
 {
-    if (!isConnected()) {
-        qWarning() << "ClipboardManager: No stream running, cannot fetch clipboard";
-        return false;
+    {
+        QMutexLocker lock(&m_lock);
+        if (m_computer == nullptr) {
+            qWarning() << "ClipboardManager: No stream running, cannot fetch clipboard";
+            return false;
+        }
+        m_pending.manualFetch = true;
     }
-    return postStreamEvent(SDL_CODE_CLIPBOARD_FETCH_REQUEST, nullptr);
+
+    wakeStream();
+    return true;
+}
+
+void ClipboardManager::processPendingWork()
+{
+    // Clear before taking the work, so anything stored after this posts a new
+    // wakeup
+    m_wakePosted = false;
+
+    PendingWork work;
+    {
+        QMutexLocker lock(&m_lock);
+        if (m_computer == nullptr) {
+            return;
+        }
+        work = m_pending;
+        m_pending = PendingWork();
+    }
+
+    // Upload results first: they record what the host confirmed, which a
+    // fetch result is compared against
+    if (work.hasUploadResult) {
+        handleUploadResult(work.uploadSucceeded, work.uploadHash);
+    }
+    if (work.hasFetchResult) {
+        handleFetchResult(work.fetchedContent, work.fetchForced);
+    }
+    if (work.manualUpload) {
+        uploadLocalClipboard(work.manualUploadForced);
+    }
+    if (work.manualFetch) {
+        requestFetch(true);
+    }
+
+    startDeferredFetch();
 }
 
 void ClipboardManager::onStreamClipboardUpdated()
 {
+    processPendingWork();
+
     if (m_enabled) {
         uploadLocalClipboard(false);
     }
@@ -181,178 +397,282 @@ void ClipboardManager::onStreamClipboardUpdated()
 
 void ClipboardManager::onStreamFocusLost()
 {
+    processPendingWork();
+
     if (m_enabled && m_bidirectionalSync) {
         requestFetch(false);
     }
 }
 
-void ClipboardManager::handleStreamEvent(int code, void *data)
-{
-    NvComputer *computer;
-    quint64 generation;
-    const bool connected = currentConnection(&computer, &generation);
-
-    switch (code) {
-    case SDL_CODE_CLIPBOARD_UPLOAD_REQUEST:
-        uploadLocalClipboard(data != nullptr);
-        break;
-
-    case SDL_CODE_CLIPBOARD_FETCH_REQUEST:
-        requestFetch(true);
-        break;
-
-    case SDL_CODE_CLIPBOARD_UPLOAD_DONE: {
-        std::unique_ptr<UploadResult> result(static_cast<UploadResult*>(data));
-        if (!connected || result->generation != generation) {
-            break; // Result from a previous session
-        }
-
-        m_uploadInFlight = false;
-        if (result->success) {
-            qInfo() << "ClipboardManager: Uploaded clipboard to host";
-        }
-        else {
-            qWarning() << "ClipboardManager: Failed to upload clipboard to host";
-            if (m_lastSyncedHash == result->hash) {
-                // Let the next clipboard update retry this content
-                m_lastSyncedHash.clear();
-            }
-        }
-
-        if (m_uploadPending) {
-            m_uploadPending = false;
-            uploadLocalClipboard(false);
-        }
-        break;
-    }
-
-    case SDL_CODE_CLIPBOARD_FETCH_DONE: {
-        std::unique_ptr<FetchResult> result(static_cast<FetchResult*>(data));
-        if (!connected || result->generation != generation) {
-            break; // Result from a previous session
-        }
-
-        m_fetchInFlight = false;
-        applyFetchedClipboard(*result);
-        break;
-    }
-
-    default:
-        SDL_assert(false);
-        break;
-    }
-}
-
 void ClipboardManager::uploadLocalClipboard(bool force)
 {
-    NvComputer *computer;
-    quint64 generation;
-    if (!currentConnection(&computer, &generation)) {
+    if (!isConnected()) {
         return;
     }
 
-    if (m_uploadInFlight) {
-        // Re-read the clipboard once the current upload finishes
-        m_uploadPending = true;
-        return;
-    }
-
-    if (!SDL_HasClipboardText()) {
-        return;
-    }
-
-    // SDL reads other clients' selections with a timeout, so this can't hang
+    // Read the offer now: SDL can lose it (e.g. on focus loss) before an
+    // upload in flight finishes. SDL returns an empty string if there's no
+    // text or reading it failed.
     char *rawText = SDL_GetClipboardText();
-    if (rawText == nullptr) {
-        return;
-    }
-    const QByteArray utf8(rawText);
+    const QByteArray utf8(rawText ? rawText : "");
     SDL_free(rawText);
 
     if (utf8.isEmpty()) {
+        if (force) {
+            qDebug() << "ClipboardManager: No text on the local clipboard to upload";
+        }
         return;
     }
+
+    if (!m_textSetThroughSdl.isEmpty() && utf8 != m_textSetThroughSdl) {
+        // The user copied something else, so the text we set is no longer ours
+        // to hand over when the stream ends
+        m_textSetThroughSdl.clear();
+    }
+
     if (utf8.size() > m_maxClipboardSize) {
         qWarning() << "ClipboardManager: Local clipboard too large to upload:" << utf8.size() << "bytes";
         return;
     }
 
     const QString text = QString::fromUtf8(utf8);
-    const QByteArray hash = contentHash(text);
-    if (!force && hash == m_lastSyncedHash) {
-        // Already in sync (including our own SDL_SetClipboardText() echo)
+    if (m_uploadInFlight) {
+        // Keep only the newest copy and send it once the current upload is done
+        m_pendingUploadText = text;
+        m_pendingUploadForced |= force;
         return;
     }
 
-    // Optimistically mark as synced so repeated updates don't upload it again
-    m_lastSyncedHash = hash;
+    startUpload(text, force);
+}
+
+void ClipboardManager::startUpload(const QString &text, bool force)
+{
+    const QByteArray hash = contentHash(text);
+    if (!force && hash == m_lastSyncedHash) {
+        // Already on the host (including our own SDL_SetClipboardText() echo)
+        return;
+    }
+
+    HttpJob job;
+    if (!currentEndpoint(&job.endpoint, &job.generation)) {
+        return;
+    }
+    job.kind = HttpJob::Kind::Upload;
+    job.text = text;
+    job.hash = hash;
+
     m_uploadInFlight = true;
+    if (m_fetchInFlight) {
+        // That fetch may return the host's text from before this upload
+        m_fetchSuperseded = true;
+    }
 
-    qDebug() << "ClipboardManager: Uploading local clipboard to host (" << utf8.size() << "bytes)";
-
-    QThreadPool::globalInstance()->start([computer, generation, text, hash]() {
-        NvHTTP http(computer);
-        auto *result = new UploadResult{generation, http.sendClipboardContent(text), hash};
-        if (!postStreamEvent(SDL_CODE_CLIPBOARD_UPLOAD_DONE, result)) {
-            delete result;
-        }
-    });
+    qDebug() << "ClipboardManager: Uploading local clipboard to host (" << text.size() << "characters)";
+    enqueueHttpJob(std::move(job));
 }
 
 void ClipboardManager::requestFetch(bool force)
 {
-    NvComputer *computer;
-    quint64 generation;
-    if (!currentConnection(&computer, &generation)) {
+    if (m_uploadInFlight || m_fetchInFlight) {
+        // Fetch once the current request finishes, so the result reflects any
+        // upload in flight. Coalesce with an earlier deferred fetch, keeping
+        // it forced if either was.
+        if (force || m_pendingFetch == PendingFetch::None) {
+            m_pendingFetch = force ? PendingFetch::Forced : PendingFetch::IfChanged;
+        }
         return;
     }
 
-    if (m_fetchInFlight) {
+    HttpJob job;
+    if (!currentEndpoint(&job.endpoint, &job.generation)) {
         return;
     }
+    job.kind = HttpJob::Kind::Fetch;
+    job.force = force;
+
     m_fetchInFlight = true;
+    m_fetchSuperseded = false;
 
     qDebug() << "ClipboardManager: Fetching host clipboard";
-
-    QThreadPool::globalInstance()->start([computer, generation, force]() {
-        NvHTTP http(computer);
-        auto *result = new FetchResult{generation, force, http.getClipboardContent()};
-        if (!postStreamEvent(SDL_CODE_CLIPBOARD_FETCH_DONE, result)) {
-            delete result;
-        }
-    });
+    enqueueHttpJob(std::move(job));
 }
 
-void ClipboardManager::applyFetchedClipboard(const FetchResult &result)
+void ClipboardManager::startDeferredFetch()
 {
-    if (result.content.isEmpty()) {
+    if (m_pendingFetch == PendingFetch::None || m_uploadInFlight || m_fetchInFlight) {
+        return;
+    }
+
+    const bool force = m_pendingFetch == PendingFetch::Forced;
+    m_pendingFetch = PendingFetch::None;
+    requestFetch(force);
+}
+
+void ClipboardManager::handleUploadResult(bool success, const QByteArray &hash)
+{
+    m_uploadInFlight = false;
+
+    if (success) {
+        // Only now does the host hold this content
+        m_lastSyncedHash = hash;
+        qInfo() << "ClipboardManager: Uploaded clipboard to host";
+    }
+    else {
+        // Keep the last confirmed hash, so the next clipboard update retries
+        // this content and a fetch still compares against what the host has
+        qWarning() << "ClipboardManager: Failed to upload clipboard to host";
+    }
+
+    if (!m_pendingUploadText.isEmpty()) {
+        QString text;
+        text.swap(m_pendingUploadText);
+        const bool force = m_pendingUploadForced;
+        m_pendingUploadForced = false;
+        startUpload(text, force);
+    }
+}
+
+void ClipboardManager::handleFetchResult(const QString &content, bool force)
+{
+    m_fetchInFlight = false;
+
+    if (m_fetchSuperseded) {
+        m_fetchSuperseded = false;
+
+        // A newer local copy was uploaded after this fetch started, so the
+        // result may be stale. An explicit request runs again after the upload.
+        qDebug() << "ClipboardManager: Dropping host clipboard fetched before a newer upload";
+        if (force) {
+            m_pendingFetch = PendingFetch::Forced;
+        }
+        return;
+    }
+
+    applyFetchedClipboard(content, force);
+}
+
+void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
+{
+    if (content.isEmpty()) {
         qDebug() << "ClipboardManager: Host clipboard is empty or unavailable";
         return;
     }
 
-    const QByteArray utf8 = result.content.toUtf8();
+    const QByteArray utf8 = content.toUtf8();
+    if (utf8.contains('\0')) {
+        // SDL_SetClipboardText() takes a NUL-terminated string, so it would
+        // only install the text before the NUL
+        qWarning() << "ClipboardManager: Host clipboard contains an embedded NUL, not applying it";
+        return;
+    }
     if (utf8.size() > m_maxClipboardSize) {
         qWarning() << "ClipboardManager: Host clipboard too large:" << utf8.size() << "bytes";
         return;
     }
 
-    const QByteArray hash = contentHash(result.content);
-    if (!result.force && hash == m_lastSyncedHash) {
+    const QByteArray hash = contentHash(content);
+    if (!force && hash == m_lastSyncedHash) {
         // The host hasn't changed its clipboard since the last sync. Don't
         // replace anything copied locally since then with stale host content.
         qDebug() << "ClipboardManager: Host clipboard unchanged since last sync";
         return;
     }
 
-    // SDL owns the selection on its own Wayland connection and answers
-    // requests for it from the streaming thread's event loop.
+    // SDL owns the selection on its own display connection and answers
+    // requests for it from the stream's event loop. disconnect() hands it
+    // over to Qt when that loop ends.
     if (SDL_SetClipboardText(utf8.constData()) != 0) {
         qWarning() << "ClipboardManager: Failed to set local clipboard:" << SDL_GetError();
         return;
     }
 
     m_lastSyncedHash = hash;
+    m_textSetThroughSdl = utf8;
     qInfo() << "ClipboardManager: Set local clipboard from host (" << utf8.size() << "bytes)";
+}
+
+void ClipboardManager::enqueueHttpJob(HttpJob job)
+{
+    bool startWorker;
+    {
+        QMutexLocker lock(&m_lock);
+        if (m_shuttingDown) {
+            return;
+        }
+        m_httpQueue.push_back(std::move(job));
+        startWorker = !m_httpWorkerRunning;
+        m_httpWorkerRunning = true;
+    }
+
+    if (startWorker) {
+        // The global pool is waited on (with a timeout) at exit. The instance
+        // is never deleted, so the worker can't outlive it.
+        QThreadPool::globalInstance()->start([this]() {
+            runHttpQueue();
+        });
+    }
+}
+
+void ClipboardManager::runHttpQueue()
+{
+    // Run requests one at a time, in the order they were queued, so an older
+    // POST can never land on Apollo after a newer one
+    for (;;) {
+        HttpJob job;
+        {
+            QMutexLocker lock(&m_lock);
+
+            // Skip requests whose session ended before they started
+            while (!m_httpQueue.empty() &&
+                   (m_shuttingDown || m_httpQueue.front().generation != m_generation)) {
+                m_httpQueue.pop_front();
+            }
+            if (m_httpQueue.empty()) {
+                m_httpWorkerRunning = false;
+                return;
+            }
+
+            job = std::move(m_httpQueue.front());
+            m_httpQueue.pop_front();
+        }
+
+        NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert);
+
+        bool uploadSucceeded = false;
+        QString fetchedContent;
+        try {
+            if (job.kind == HttpJob::Kind::Upload) {
+                uploadSucceeded = http.sendClipboardContent(job.text);
+            }
+            else {
+                fetchedContent = http.getClipboardContent();
+            }
+        }
+        catch (...) {
+            qWarning() << "ClipboardManager: Unexpected exception during clipboard request";
+        }
+
+        {
+            QMutexLocker lock(&m_lock);
+            if (m_shuttingDown || job.generation != m_generation) {
+                continue; // The session ended while this request ran
+            }
+
+            if (job.kind == HttpJob::Kind::Upload) {
+                m_pending.hasUploadResult = true;
+                m_pending.uploadSucceeded = uploadSucceeded;
+                m_pending.uploadHash = job.hash;
+            }
+            else {
+                m_pending.hasFetchResult = true;
+                m_pending.fetchForced = job.force;
+                m_pending.fetchedContent = fetchedContent;
+            }
+        }
+
+        wakeStream();
+    }
 }
 
 void ClipboardManager::setEnabled(bool enabled)
@@ -404,14 +724,5 @@ void ClipboardManager::setMaxContentSizeMB(int sizeMB)
 
         emit maxContentSizeMBChanged();
         qDebug() << "ClipboardManager: Max content size changed to" << sizeMB << "MB";
-    }
-}
-
-void ClipboardManager::setShowNotifications(bool show)
-{
-    if (m_showNotifications != show) {
-        m_showNotifications = show;
-        emit showNotificationsChanged();
-        qDebug() << "ClipboardManager: Show notifications changed to" << show;
     }
 }
