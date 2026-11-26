@@ -1047,11 +1047,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         
         // Connect the ClipboardManager to the QuickMenuManager
         m_QuickMenuManager->setClipboardManager(m_ClipboardManager);
-        
-        // Connect signals for permission updates
-        connect(m_ServerCommandManager, &ServerCommandManager::permissionChanged,
-                m_QuickMenuManager, &QuickMenuManager::serverCommandsChanged);
-        
+
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "ServerCommandManager and ClipboardManager initialized and connected to QuickMenuManager");
     } else {
