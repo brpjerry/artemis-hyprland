@@ -161,7 +161,8 @@ cd artemis-hyprland
 chmod +x scripts/setup-dev.sh
 ./scripts/setup-dev.sh
 
-# The script will install dependencies and build the project
+# The script installs dependencies and, on Linux and macOS, builds the project.
+# On Windows it prints the manual build commands instead.
 ```
 
 On Arch Linux you can install the prebuilt pacman package instead; see
