@@ -639,10 +639,9 @@ Session::~Session()
         delete m_ServerCommandManager;
         m_ServerCommandManager = nullptr;
     }
-    if (m_ClipboardManager) {
-        delete m_ClipboardManager;
-        m_ClipboardManager = nullptr;
-    }
+    // m_ClipboardManager is the shared process-wide instance. It is only
+    // connected while exec() runs the SDL event loop, so there is nothing to
+    // clean up here.
 
     SDL_DestroyMutex(m_DecoderLock);
 }
@@ -1046,10 +1045,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // Set up the ServerCommandManager with the computer and HTTP client
         NvHTTP* httpClient = new NvHTTP(m_Computer);
         m_ServerCommandManager->setConnection(m_Computer, httpClient);
-        
-        // Set up the ClipboardManager with the same HTTP client
-        m_ClipboardManager->setConnection(m_Computer, httpClient);
-        
+
         // Connect the ServerCommandManager to the QuickMenuManager
         m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
         
@@ -1965,6 +1961,10 @@ void Session::exec()
         return;
     }
 
+    // The Qt event loop won't run during the stream, so Qt can't keep serving
+    // the clipboard. Let ClipboardManager move it to SDL for the stream.
+    m_ClipboardManager->prepareForStream();
+
     // Pump the Qt event loop one last time before we create our SDL window
     // This is sometimes necessary for the QML code to process any signals
     // we've emitted from the async connection thread.
@@ -2151,6 +2151,9 @@ void Session::exec()
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();
 
+    // Clipboard sync runs on this event loop, from here until DispatchDeferredCleanup
+    m_ClipboardManager->setConnection(m_Computer);
+
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
@@ -2227,6 +2230,9 @@ void Session::exec()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+            case SDL_CODE_CLIPBOARD_WAKE:
+                m_ClipboardManager->processPendingWork();
+                break;
             default:
                 SDL_assert(false);
             }
@@ -2240,17 +2246,18 @@ void Session::exec()
                     m_AudioMuted = true;
                 }
                 m_InputHandler->notifyFocusLost();
-                
-                // Trigger clipboard sync from server when focus is lost
-                if (m_ClipboardManager) {
-                    m_ClipboardManager->onFocusLost();
-                }
+
+                // Pull the host clipboard so it can be pasted locally
+                m_ClipboardManager->onStreamFocusLost();
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
                 if (m_Preferences->muteOnFocusLoss) {
                     m_AudioMuted = false;
                 }
                 m_InputHandler->notifyFocusGained();
+
+                // Pick up clipboard work whose wakeup event was lost
+                m_ClipboardManager->processPendingWork();
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
@@ -2441,6 +2448,12 @@ void Session::exec()
             SDL_UnlockMutex(m_DecoderLock);
             break;
 
+        case SDL_CLIPBOARDUPDATE:
+            // The local clipboard changed, or the compositor re-sent it when
+            // the stream window gained focus
+            m_ClipboardManager->onStreamClipboardUpdated();
+            break;
+
         case SDL_KEYUP:
         case SDL_KEYDOWN:
             presence.runCallbacks();
@@ -2504,6 +2517,10 @@ void Session::exec()
     }
 
 DispatchDeferredCleanup:
+    // Stop clipboard sync while the window and SDL video are still alive, so
+    // the clipboard can be handed over to Qt
+    m_ClipboardManager->disconnect();
+
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
 

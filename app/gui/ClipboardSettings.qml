@@ -103,38 +103,6 @@ GroupBox {
             }
         }
 
-        // Privacy section
-        GroupBox {
-            width: parent.width
-            title: qsTr("Privacy")
-            font.pointSize: 10
-            enabled: enableClipboardSync.checked
-            clip: true
-
-            Column {
-                anchors.fill: parent
-                spacing: 8
-
-                CheckBox {
-                    id: showNotifications
-                    text: qsTr("Show sync notifications")
-                    font.pointSize: 10
-                    checked: ClipboardManager.showNotifications
-                    onCheckedChanged: {
-                        ClipboardManager.showNotifications = checked
-                    }
-                }
-
-                Label {
-                    width: parent.width
-                    text: qsTr("Display toast notifications when clipboard content is synchronized")
-                    font.pointSize: 8
-                    wrapMode: Text.Wrap
-                    color: "#aaaaaa"
-                }
-            }
-        }
-
         // Note about when sync is active
         Label {
             width: parent.width
