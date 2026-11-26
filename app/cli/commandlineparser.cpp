@@ -260,7 +260,11 @@ void PairCommandLineParser::parse(const QStringList &args)
     parser.addPositionalArgument("pair", "pair host");
     parser.addPositionalArgument("host", "Host computer name, UUID, or IP address", "<host>");
     parser.addValueOption("pin", "4 digit pairing PIN");
-    parser.addValueOption("passphrase", "Apollo OTP passphrase. Pairs with the OTP given as --pin");
+    parser.addOption(QCommandLineOption("passphrase",
+                                        "Pair with the Apollo OTP given as --pin, using this passphrase. "
+                                        "Both values can show up in process listings and shell history; "
+                                        "the OTP pairing dialog keeps them private.",
+                                        "passphrase"));
 
     if (!parser.parse(args)) {
         parser.showError(parser.errorText());
@@ -282,9 +286,16 @@ void PairCommandLineParser::parse(const QStringList &args)
     if (!m_PredefinedPin.isEmpty() && !QRegularExpression("^\\d{4}$").match(m_PredefinedPin).hasMatch()) {
         parser.showError("PIN must be 4 digits");
     }
-    m_OtpPassphrase = parser.value("passphrase");
-    if (!m_OtpPassphrase.isEmpty() && m_PredefinedPin.isEmpty()) {
-        parser.showError("--passphrase needs the OTP from the Apollo server as --pin");
+    if (parser.isSet("passphrase")) {
+        m_OtpPassphrase = parser.value("passphrase");
+        // Apollo won't generate an OTP without a passphrase, so an empty one
+        // is a mistake rather than a request for PIN pairing
+        if (m_OtpPassphrase.isEmpty()) {
+            parser.showError("--passphrase can't be empty");
+        }
+        if (m_PredefinedPin.isEmpty()) {
+            parser.showError("--passphrase needs the OTP from the Apollo server as --pin");
+        }
     }
 }
 

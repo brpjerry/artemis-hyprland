@@ -1,8 +1,10 @@
 #include "nvpairingmanager.h"
 #include "utils.h"
 
+#include <exception>
 #include <stdexcept>
 
+#include <QScopeGuard>
 #include <QUrl>
 #include <QXmlStreamReader>
 
@@ -49,9 +51,12 @@ NvPairingManager::~NvPairingManager()
 QByteArray
 NvPairingManager::generateRandomBytes(int length)
 {
-    char* data = static_cast<char*>(alloca(length));
-    RAND_bytes(reinterpret_cast<unsigned char*>(data), length);
-    return QByteArray(data, length);
+    QByteArray data(length, 0);
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(data.data()), length) != 1) {
+        qCritical() << "Unable to generate random bytes for pairing";
+        return QByteArray();
+    }
+    return data;
 }
 
 QByteArray
@@ -97,13 +102,17 @@ NvPairingManager::decrypt(const QByteArray& ciphertext, const QByteArray& key)
     EVP_CIPHER_CTX_set_padding(cipher, 0);
 
     QByteArray plaintext(ciphertext.size(), 0);
-    int plaintextLen;
-    EVP_DecryptUpdate(cipher,
-                      reinterpret_cast<unsigned char*>(plaintext.data()),
-                      &plaintextLen,
-                      reinterpret_cast<const unsigned char*>(ciphertext.data()),
-                      ciphertext.length());
-    Q_ASSERT(plaintextLen == plaintext.length());
+    int plaintextLen = 0;
+    if (EVP_DecryptUpdate(cipher,
+                          reinterpret_cast<unsigned char*>(plaintext.data()),
+                          &plaintextLen,
+                          reinterpret_cast<const unsigned char*>(ciphertext.data()),
+                          ciphertext.length()) != 1 ||
+            plaintextLen != plaintext.length()) {
+        // A failure, or a partial block from a malformed reply. The callers'
+        // size checks reject the empty result.
+        plaintext.clear();
+    }
 
     EVP_CIPHER_CTX_free(cipher);
 
@@ -188,9 +197,12 @@ NvPairingManager::verifySignature(const QByteArray& data, const QByteArray& sign
 #endif
     THROW_BAD_ALLOC_IF_NULL(mdctx);
 
-    EVP_DigestVerifyInit(mdctx, nullptr, EVP_sha256(), nullptr, pubKey);
-    EVP_DigestVerifyUpdate(mdctx, data.data(), data.length());
-    int result = EVP_DigestVerifyFinal(mdctx, reinterpret_cast<unsigned char*>(const_cast<char*>(signature.data())), signature.length());
+    // Stop at the first failure: a key that can't do SHA-256 verification
+    // fails initialization, and the later calls are undefined after that
+    const bool verified =
+            EVP_DigestVerifyInit(mdctx, nullptr, EVP_sha256(), nullptr, pubKey) == 1 &&
+            EVP_DigestVerifyUpdate(mdctx, data.data(), data.length()) == 1 &&
+            EVP_DigestVerifyFinal(mdctx, reinterpret_cast<unsigned char*>(const_cast<char*>(signature.data())), signature.length()) == 1;
 
     EVP_PKEY_free(pubKey);
 #if (OPENSSL_VERSION_NUMBER < 0x10100000L)
@@ -200,7 +212,7 @@ NvPairingManager::verifySignature(const QByteArray& data, const QByteArray& sign
 #endif
     X509_free(cert);
 
-    return result > 0;
+    return verified;
 }
 
 QByteArray
@@ -268,9 +280,9 @@ NvPairingManager::cancelPairing(bool apolloOtp)
                                       "pair",
                                       "devicename=roth&updateState=1&clientpairingsecret=",
                                       REQUEST_TIMEOUT_MS);
-    } catch (const GfeHttpResponseException&) {
-        // Best effort: the attempt has already failed
-    } catch (const QtNetworkReplyException&) {
+    } catch (...) {
+        // Best effort: the attempt has already failed, and this also runs
+        // while its exception unwinds
     }
 }
 
@@ -284,9 +296,10 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
 
     QCryptographicHash::Algorithm hashAlgo;
     int hashLength;
-    if (serverMajorVersion >= 7)
+    if (apolloOtp || serverMajorVersion >= 7)
     {
-        // Gen 7+ uses SHA-256 hashing
+        // Gen 7+ and Apollo OTP use SHA-256 hashing. (The OTP host's
+        // appversion is unauthenticated, so it can't pick SHA-1.)
         hashAlgo = QCryptographicHash::Sha256;
         hashLength = 32;
     }
@@ -298,7 +311,31 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     }
 
     QByteArray salt = generateRandomBytes(16);
+    if (salt.isEmpty()) {
+        return PairState::FAILED;
+    }
     QByteArray saltedPin = saltPin(salt, pin);
+
+    // For OTP, a failure that throws (a network error or an error status)
+    // must also end the host's session, or the next attempt loses its OTP
+    const int uncaughtAtStart = std::uncaught_exceptions();
+    const auto cancelOnException = qScopeGuard([&] {
+        if (apolloOtp && std::uncaught_exceptions() > uncaughtAtStart) {
+            cancelPairing(apolloOtp);
+        }
+    });
+
+    // verifyResponseStatus() logs the status message and puts it in the error
+    // shown to the user. An OTP reply's message could echo the request, so
+    // remove otpauth and the salt from it first.
+    QStringList otpSecrets;
+    auto verifyStatus = [&otpSecrets](const QString& xml) {
+        QString checked = xml;
+        for (const QString& secret : std::as_const(otpSecrets)) {
+            checked.replace(secret, QStringLiteral("REDACTED"), Qt::CaseInsensitive);
+        }
+        NvHTTP::verifyResponseStatus(checked);
+    };
 
     QByteArray aesKey = QCryptographicHash::hash(saltedPin, hashAlgo);
     aesKey.truncate(16);
@@ -311,6 +348,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
         // OTP and passphrase.
         QString otpAuth = QCryptographicHash::hash((pin + salt.toHex() + otp->passphrase).toUtf8(),
                                                    QCryptographicHash::Sha256).toHex().toUpper();
+        otpSecrets << otpAuth << QString::fromLatin1(salt.toHex());
         getCert = m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
                                                 "pair",
                                                 "devicename=" + QString::fromLatin1(QUrl::toPercentEncoding(otp->deviceName)) +
@@ -327,7 +365,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
                                                 salt.toHex() + "&clientcert=" + IdentityManager::get()->getCertificate().toHex(),
                                                 0);
     }
-    NvHTTP::verifyResponseStatus(getCert);
+    verifyStatus(getCert);
     if (apolloOtp && getRootStatusMessage(getCert) == "OTP auth not available.") {
         qCritical() << "No OTP available on the host";
         cancelPairing(apolloOtp);
@@ -336,6 +374,9 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (NvHTTP::getXmlString(getCert, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #1";
+        if (apolloOtp) {
+            cancelPairing(apolloOtp);
+        }
         return PairState::FAILED;
     }
 
@@ -348,8 +389,6 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
 
     QSslCertificate unverifiedServerCert = QSslCertificate(serverCertStr);
     if (unverifiedServerCert.isNull()) {
-        Q_ASSERT(!unverifiedServerCert.isNull());
-
         qCritical() << "Failed to parse plaincert";
         cancelPairing(apolloOtp);
         return PairState::FAILED;
@@ -359,14 +398,23 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     // the cert into the NvComputer object and persist it.
     m_Http.setServerCert(unverifiedServerCert);
 
+    // Check the proof against the single certificate Qt took from the reply,
+    // the one that will be pinned and saved. OpenSSL could pick a different
+    // one from a reply with several PEM blocks.
+    serverCertStr = unverifiedServerCert.toPem();
+
     QByteArray randomChallenge = generateRandomBytes(16);
+    if (randomChallenge.isEmpty()) {
+        cancelPairing(apolloOtp);
+        return PairState::FAILED;
+    }
     QByteArray encryptedChallenge = encrypt(randomChallenge, aesKey);
     QString challengeXml = m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
                                                          "pair",
                                                          "devicename=roth&updateState=1&clientchallenge=" +
                                                          encryptedChallenge.toHex(),
                                                          REQUEST_TIMEOUT_MS);
-    NvHTTP::verifyResponseStatus(challengeXml);
+    verifyStatus(challengeXml);
     if (NvHTTP::getXmlString(challengeXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #2";
@@ -382,6 +430,10 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     }
 
     QByteArray clientSecretData = generateRandomBytes(16);
+    if (clientSecretData.isEmpty()) {
+        cancelPairing(apolloOtp);
+        return PairState::FAILED;
+    }
     QByteArray challengeResponse;
     QByteArray serverResponse(challengeResponseData.data(), hashLength);
 
@@ -397,7 +449,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
                                                     "devicename=roth&updateState=1&serverchallengeresp=" +
                                                     encryptedChallengeResponseHash.toHex(),
                                                     REQUEST_TIMEOUT_MS);
-    NvHTTP::verifyResponseStatus(respXml);
+    verifyStatus(respXml);
     if (NvHTTP::getXmlString(respXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #3";
@@ -444,7 +496,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
                                                           "devicename=roth&updateState=1&clientpairingsecret=" +
                                                           clientPairingSecret.toHex(),
                                                           REQUEST_TIMEOUT_MS);
-    NvHTTP::verifyResponseStatus(secretRespXml);
+    verifyStatus(secretRespXml);
     if (NvHTTP::getXmlString(secretRespXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #4";
@@ -456,7 +508,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
                                                              "pair",
                                                              "devicename=roth&updateState=1&phrase=pairchallenge",
                                                              REQUEST_TIMEOUT_MS);
-    NvHTTP::verifyResponseStatus(pairChallengeXml);
+    verifyStatus(pairChallengeXml);
     if (NvHTTP::getXmlString(pairChallengeXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #5";

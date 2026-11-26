@@ -705,13 +705,16 @@ private:
             {
             case NvPairingManager::PairState::PAIRED:
                 {
-                    QWriteLocker lock(&m_ComputerManager->m_Lock);
+                    // Manager then host, the order serialization takes them in.
+                    // Host readers (the model, the delayed flush) take only the
+                    // host's lock.
+                    QWriteLocker managerLock(&m_ComputerManager->m_Lock);
+                    QWriteLocker computerLock(&m_Computer->lock);
                     m_Computer->serverCert = serverCert;
                     m_Computer->pairState = NvComputer::PS_PAIRED;
                 }
 
-                // Persist the newly pinned server certificate for this host
-                m_ComputerManager->saveHost(m_Computer);
+                // Notifies the UI and persists the newly pinned certificate
                 m_ComputerManager->handleComputerStateChanged(m_Computer);
 
                 emit pairingCompleted(m_Computer, QString());
