@@ -2187,6 +2187,7 @@ void Session::execInternal()
         // and other problems.
         if (!SDL_WaitEventTimeout(&event, 1000)) {
             presence.runCallbacks();
+            m_ClipboardManager->processStrandedWork();
             continue;
         }
 #else
@@ -2203,6 +2204,7 @@ void Session::execInternal()
             SDL_Delay(10);
 #endif
             presence.runCallbacks();
+            m_ClipboardManager->processStrandedWork();
             continue;
         }
 #endif

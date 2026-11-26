@@ -298,9 +298,9 @@ bool ClipboardManager::currentEndpoint(Endpoint *endpoint, quint64 *generation) 
     return true;
 }
 
-QByteArray ClipboardManager::contentHash(const QString &content)
+QByteArray ClipboardManager::contentHash(const QByteArray &utf8)
 {
-    return QCryptographicHash::hash(content.toUtf8(), QCryptographicHash::Sha256);
+    return QCryptographicHash::hash(utf8, QCryptographicHash::Sha256);
 }
 
 void ClipboardManager::wakeStream()
@@ -315,9 +315,17 @@ void ClipboardManager::wakeStream()
     event.user.code = SDL_CODE_CLIPBOARD_WAKE;
 
     if (SDL_PushEvent(&event) != 1) {
-        // The work stays stored and is picked up on the next clipboard or
-        // focus event, or by the next successful wakeup
+        // The work stays stored. The SDL loop picks it up when it's next idle
+        // (processStrandedWork()), or on the next clipboard or focus event.
         m_wakePosted = false;
+        m_wakeFailed = true;
+    }
+}
+
+void ClipboardManager::processStrandedWork()
+{
+    if (m_wakeFailed.exchange(false)) {
+        processPendingWork();
     }
 }
 
@@ -388,11 +396,14 @@ void ClipboardManager::processPendingWork()
 
 void ClipboardManager::onStreamClipboardUpdated()
 {
-    processPendingWork();
-
+    // Read the new local offer before applying stored results: a fetch that
+    // completed meanwhile is then marked superseded by this upload and
+    // dropped, instead of overwriting the newer local copy.
     if (m_enabled) {
         uploadLocalClipboard(false);
     }
+
+    processPendingWork();
 }
 
 void ClipboardManager::onStreamFocusLost()
@@ -448,7 +459,7 @@ void ClipboardManager::uploadLocalClipboard(bool force)
 
 void ClipboardManager::startUpload(const QString &text, bool force)
 {
-    const QByteArray hash = contentHash(text);
+    const QByteArray hash = contentHash(text.toUtf8());
     if (!force && hash == m_lastSyncedHash) {
         // Already on the host (including our own SDL_SetClipboardText() echo)
         return;
@@ -571,7 +582,7 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
         return;
     }
 
-    const QByteArray hash = contentHash(content);
+    const QByteArray hash = contentHash(utf8);
     if (!force && hash == m_lastSyncedHash) {
         // The host hasn't changed its clipboard since the last sync. Don't
         // replace anything copied locally since then with stale host content.

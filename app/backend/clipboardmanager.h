@@ -32,8 +32,9 @@ Q_DECLARE_OPAQUE_POINTER(NvComputer*)
  *        through the host's /actions/clipboard HTTP endpoint.
  *
  * Threading model:
- *  - The local clipboard is only accessed through SDL's clipboard API, on the
- *    thread that pumps the stream's SDL event loop (the "SDL thread" below).
+ *  - While streaming, the local clipboard is only accessed through SDL's
+ *    clipboard API, on the thread that pumps the stream's SDL event loop (the
+ *    "SDL thread" below). Between streams Qt owns it (see the handoffs below).
  *    That thread keeps dispatching the stream window's Wayland events, so SDL
  *    answers clipboard requests from other clients promptly. QClipboard must
  *    not be used during a stream: the Qt event loop doesn't run until the
@@ -120,6 +121,9 @@ public:
     // SDL thread: called from the stream's SDL event loop. Each of these first
     // processes stored work (HTTP results, manual requests).
     void processPendingWork(); // SDL_CODE_CLIPBOARD_WAKE, focus gained
+    // Called when the SDL loop is idle: picks up work whose wakeup event
+    // couldn't be posted (SDL's event queue was full). Cheap when there is none.
+    void processStrandedWork();
     void onStreamClipboardUpdated(); // SDL_CLIPBOARDUPDATE
     void onStreamFocusLost(); // SDL_WINDOWEVENT_FOCUS_LOST
 
@@ -194,7 +198,7 @@ private:
     // Worker thread
     void runHttpQueue();
 
-    static QByteArray contentHash(const QString &content);
+    static QByteArray contentHash(const QByteArray &utf8);
 
     static constexpr int DEFAULT_MAX_SIZE = 1048576; // 1 MiB
 
@@ -208,6 +212,7 @@ private:
     bool m_shuttingDown;
     QString m_textFromQt; // Text Qt owns, noted on the GUI thread, taken by setConnection()
     std::atomic<bool> m_wakePosted;
+    std::atomic<bool> m_wakeFailed {false};
 
     // Settings
     std::atomic<bool> m_enabled;
