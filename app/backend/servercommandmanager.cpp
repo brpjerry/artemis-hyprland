@@ -1,6 +1,7 @@
 #include "servercommandmanager.h"
 #include "nvcomputer.h"
 #include "nvhttp.h"
+#include "serverpermissions.h"
 #include "streaming/session.h"
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -79,14 +80,12 @@ void ServerCommandManager::refreshCommands()
     // order LiSendExecServerCmd() indexes them. Use exactly that list: no
     // network requests here (this runs while a stream starts) and no guessed
     // commands, whose indices wouldn't match the host's.
-    // Apollo's PERM bits (src/crypto.h): server_cmd = 1 << 20
-    constexpr quint32 kApolloPermServerCmd = 1u << 20;
     QStringList commands;
     bool permitted = false;
     if (m_computer) {
         QReadLocker lock(&m_computer->lock);
         commands = m_computer->serverCommands;
-        permitted = (m_computer->serverPermissions & kApolloPermServerCmd) != 0;
+        permitted = (m_computer->serverPermissions & ServerPermissions::SERVER_COMMAND) != 0;
     }
     if (!permitted) {
         commands.clear();
