@@ -731,8 +731,8 @@ int main(int argc, char *argv[])
     // Set our app name for SDL to use with PulseAudio and PipeWire. This matches what we
     // provide as our app name to libsoundio too. On SDL 2.0.18+, SDL_APP_NAME is also used
     // for screensaver inhibitor reporting.
-    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Moonlight");
-    SDL_SetHint(SDL_HINT_APP_NAME, "Moonlight");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Artemis");
+    SDL_SetHint(SDL_HINT_APP_NAME, "Artemis");
 
     // SDL will try to lock the mouse cursor on Wayland if it's not visible in order to
     // support applications that assume they can warp the cursor (which isn't possible
@@ -937,10 +937,12 @@ int main(int argc, char *argv[])
     app.setWindowIcon(QIcon(":/res/artemis.svg"));
 #endif
 
-    // This is necessary to show our icon correctly on Wayland
-    app.setDesktopFileName("com.moonlight_stream.Moonlight");
-    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "com.moonlight_stream.Moonlight");
-    qputenv("SDL_VIDEO_X11_WMCLASS", "com.moonlight_stream.Moonlight");
+    // This is necessary to show our icon correctly on Wayland. It must match
+    // the installed desktop file (deploy/linux/com.artemis_desktop.Artemis.desktop),
+    // and it's also the app_id and WM_CLASS of the stream window.
+    app.setDesktopFileName("com.artemis_desktop.Artemis");
+    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "com.artemis_desktop.Artemis");
+    qputenv("SDL_VIDEO_X11_WMCLASS", "com.artemis_desktop.Artemis");
 
     // Register our C++ types for QML
     qmlRegisterType<ComputerModel>("ComputerModel", 1, 0, "ComputerModel");
