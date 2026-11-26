@@ -409,6 +409,10 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
         // which the session would otherwise stream at instead
         preferences->enableFractionalRefreshRate = false;
         preferences->fps = parser.getIntOption("fps");
+        if (preferences->fps <= 0) {
+            // Zero would also divide by zero when matching display modes
+            parser.showError("FPS must be greater than zero");
+        }
         if (!inRange(preferences->fps, 10, 480)) {
             fprintf(stderr, "Warning: FPS is out of the supported range (10 - 480 FPS). Performance may suffer!\n");
         }

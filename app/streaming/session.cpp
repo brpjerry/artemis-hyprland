@@ -741,8 +741,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
     // Artemis Apollo integration: Apply fractional refresh rate if enabled
     if (m_Preferences->enableFractionalRefreshRate) {
         // Convert fractional refresh rate to integer (multiply by 1000 for precision)
-        // This matches Apollo's internal representation: fps * 1000
-        int fractionalFps = (int)(m_Preferences->customRefreshRate * 1000);
+        // This matches Apollo's internal representation: fps * 1000. Round to the
+        // nearest millihertz, since e.g. 64.10 * 1000 is just below 64100.
+        const int fractionalFps = qRound(m_Preferences->customRefreshRate * 1000);
         m_StreamConfig.fps = fractionalFps;
         
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,

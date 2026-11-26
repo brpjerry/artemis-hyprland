@@ -62,10 +62,23 @@ extern "C" {
 #define FAILED_DECODES_RESET_THRESHOLD 20
 
 // Builds where tryInitializeRenderer() first tries an indirect EGL, DRM, or
-// Vulkan frontend for the backend renderer. Only that attempt consults the
-// preferred renderer backend (see isRendererBackendSupported()).
+// Vulkan frontend for the backend renderer. That pass is where the user's
+// preferred frontend gets tried first (see isRendererBackendSupported()).
 #if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN) && (defined(HAVE_EGL) || defined(HAVE_DRM) || defined(HAVE_LIBPLACEBO_VULKAN))
 #define HAVE_ALTERNATE_FRONTEND_PASS
+#endif
+
+// Builds where EGLRenderer can be used at all: it needs SDL 2.0.12 (see
+// EGLRenderer::initialize()) and a backend renderer that can export EGL
+// images. Only DrmRenderer and VAAPIRenderer implement canExportEGL(), and
+// VAAPIRenderer needs a VA display for the window system (see
+// VAAPIRenderer::openDisplay()). vaapi.h, included above, has already dropped
+// the HAVE_LIBVA_* display backends SDL can't use, and its KMSDRM display
+// requires libdrm, which HAVE_DRM covers.
+#if defined(HAVE_EGL) && SDL_VERSION_ATLEAST(2, 0, 12) && \
+    (defined(HAVE_DRM) || \
+     (defined(HAVE_LIBVA) && (defined(HAVE_LIBVA_X11) || defined(HAVE_LIBVA_WAYLAND))))
+#define HAVE_EGL_FRONTEND
 #endif
 
 bool FFmpegVideoDecoder::isHardwareAccelerated()
@@ -364,8 +377,10 @@ bool FFmpegVideoDecoder::initializeRendererInternal(IFFmpegRenderer* renderer, P
 
 bool FFmpegVideoDecoder::isRendererBackendSupported(int backend)
 {
-    // Keep these conditions in sync with the preference branches in
-    // createFrontendRenderer(), which only run in the alternate frontend pass
+    // Match the build requirements for trying each preferred frontend first
+    // in createFrontendRenderer(), which happens in the alternate frontend pass.
+    // (The EGL fallback there also reads the preference, but only to avoid
+    // retrying an OpenGL frontend that pass already tried.)
     switch (backend) {
     case StreamingPreferences::RB_AUTO:
         return true;
@@ -374,7 +389,7 @@ bool FFmpegVideoDecoder::isRendererBackendSupported(int backend)
     case StreamingPreferences::RB_VULKAN:
         return true;
 #endif
-#ifdef HAVE_EGL
+#ifdef HAVE_EGL_FRONTEND
     case StreamingPreferences::RB_OPENGL:
         return true;
 #endif

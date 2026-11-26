@@ -445,10 +445,11 @@ Flickable {
                     AutoResizingComboBox {
                         property int lastIndexValue
 
-                        function updateBitrateForSelection() {
-                            // Only modify the bitrate if the values actually changed
+                        function updateBitrateForSelection(recalculateBitrate) {
+                            // Only modify the bitrate if the values actually changed,
+                            // or if the caller asks for it
                             var selectedFps = parseInt(model.get(fpsComboBox.currentIndex).video_fps)
-                            if (StreamingPreferences.fps !== selectedFps) {
+                            if (StreamingPreferences.fps !== selectedFps || recalculateBitrate) {
                                 StreamingPreferences.fps = selectedFps
 
                                 if (StreamingPreferences.autoAdjustBitrate) {
@@ -486,9 +487,30 @@ Flickable {
                             currentIndex = fpsListModel.count - 1
                         }
 
+                        // Return the custom entry to the generic "Custom" action, so its
+                        // label matches the empty dialog it opens
+                        function resetCustomEntry() {
+                            for (let i = 0; i < fpsListModel.count; i++) {
+                                if (fpsListModel.get(i).is_custom) {
+                                    fpsListModel.setProperty(i, "video_fps", "")
+                                    fpsListModel.setProperty(i, "text", qsTr("Custom"))
+                                    return
+                                }
+                            }
+                        }
+
+                        // Custom refresh rates are parsed, prefilled and labeled in the locale
+                        // the dialog's validator accepts, so they all use the same decimal
+                        // separator (e.g. "59,94" in a comma-decimal locale)
+                        function refreshRateLocale() {
+                            return Qt.locale(refreshRateValidator.locale)
+                        }
+
+                        function customRefreshRateText(rate) {
+                            return qsTr("Custom (%1 Hz)").arg(rate.toLocaleString(refreshRateLocale(), 'f', 2))
+                        }
+
                         NavigableDialog {
-                            property bool isRefreshRateMode: false
-                            
                             function isInputValid() {
                                 // If we have text that isn't valid, reject the input.
                                 if (!fpsField.acceptableInput && fpsField.text) {
@@ -508,8 +530,8 @@ Flickable {
 
                                 // Start from the saved custom refresh rate, if it's in effect
                                 const savedRate = fpsComboBox.savedCustomRefreshRate()
-                                fpsField.text = savedRate > 0 ? savedRate.toString() : ""
-                                customFpsDialog.isRefreshRateMode = savedRate > 0
+                                fpsField.text = savedRate > 0 ?
+                                            savedRate.toLocaleString(fpsComboBox.refreshRateLocale(), 'f', 2) : ""
 
                                 // standardButton() was added in Qt 5.10, so we must check for it first
                                 if (customFpsDialog.standardButton) {
@@ -534,9 +556,15 @@ Flickable {
 
                                 // The preferences change only here, once the dialog is accepted
                                 if (fpsField.text && fpsField.text.trim() !== "") {
-                                    // User entered a custom refresh rate - enable fractional refresh rate mode
-                                    const refreshRate = parseFloat(fpsField.text)
-                                    if (isNaN(refreshRate)) {
+                                    // User entered a custom refresh rate - enable fractional refresh rate mode.
+                                    // Parse it as the validator did (e.g. "59,94" in a comma-decimal locale).
+                                    let refreshRate = NaN
+                                    try {
+                                        refreshRate = Number.fromLocaleString(fpsComboBox.refreshRateLocale(), fpsField.text.trim())
+                                    } catch (error) {
+                                        refreshRate = NaN
+                                    }
+                                    if (isNaN(refreshRate) || refreshRate <= 0) {
                                         reject()
                                         return
                                     }
@@ -544,7 +572,7 @@ Flickable {
                                     StreamingPreferences.customRefreshRate = refreshRate
                                     StreamingPreferences.enableFractionalRefreshRate = true
                                     fpsComboBox.selectCustomEntry(Math.round(refreshRate),
-                                                                  qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
+                                                                  fpsComboBox.customRefreshRateText(refreshRate))
                                 } else {
                                     // User didn't enter a value - disable fractional refresh rate mode
                                     // and use the placeholder as a whole frame rate
@@ -556,8 +584,10 @@ Flickable {
                                 }
 
                                 // Store the (rounded) frame rate from the custom entry and update
-                                // the bitrate to match, as selecting a preset does
-                                fpsComboBox.updateBitrateForSelection()
+                                // the bitrate to match, as selecting a preset does. Recalculate an
+                                // automatic bitrate even if the rounded FPS is unchanged: older
+                                // versions saved a custom rate's FPS without updating the bitrate.
+                                fpsComboBox.updateBitrateForSelection(true)
 
                                 // Update the combobox width too
                                 fpsComboBox.recalculateWidth()
@@ -596,11 +626,8 @@ Flickable {
                                             }
 
                                         onTextChanged: {
-                                            // A value means a custom refresh rate. This only updates the
-                                            // dialog; onAccepted applies it, so cancelling, or the clear()
-                                            // in onClosed, leaves the preferences alone.
-                                            var hasValue = fpsField.text && fpsField.text.trim() !== ""
-                                            customFpsDialog.isRefreshRateMode = hasValue
+                                            // This only updates the dialog; onAccepted applies the value, so
+                                            // cancelling, or the clear() in onClosed, leaves the preferences alone.
 
                                             // standardButton() was added in Qt 5.10, so we must check for it first
                                             if (customFpsDialog.standardButton) {
@@ -693,7 +720,7 @@ Flickable {
                             // streaming, so show it instead of the entry matching its rounded FPS
                             const customRate = savedCustomRefreshRate()
                             if (customRate > 0) {
-                                selectCustomEntry(Math.round(customRate), qsTr("Custom (%1 Hz)").arg(customRate.toFixed(2)))
+                                selectCustomEntry(Math.round(customRate), customRefreshRateText(customRate))
                             }
 
                             recalculateWidth()
@@ -731,9 +758,13 @@ Flickable {
                                 customFpsDialog.open()
                             }
                             else {
-                                // A preset frame rate replaces any custom refresh rate
+                                // A preset frame rate replaces any custom refresh rate. The saved
+                                // rate stays in the preferences, but the custom entry goes back to
+                                // plain "Custom", since its dialog will now open empty.
                                 StreamingPreferences.enableFractionalRefreshRate = false
+                                resetCustomEntry()
                                 updateBitrateForSelection()
+                                recalculateWidth()
                             }
                         }
                     }
