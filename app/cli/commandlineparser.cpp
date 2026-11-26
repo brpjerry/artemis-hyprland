@@ -87,7 +87,7 @@ public:
 
     bool getToggleOptionValue(QString name, bool defaultValue) const
     {
-        static QRegularExpression re(QString("^(%1|no-%1)$").arg(name));
+        QRegularExpression re(QString("^(%1|no-%1)$").arg(name));
         QStringList options = optionNames().filter(re);
         if (options.isEmpty()) {
             return defaultValue;
@@ -411,13 +411,21 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
         }
     }
 
+    // Resolve --yuv444 and --no-yuv444 before the default bitrate, which
+    // depends on the chroma sampling
+    const bool savedYUV444 = preferences->enableYUV444;
+    preferences->enableYUV444 = parser.getToggleOptionValue("yuv444", savedYUV444);
+
     // Resolve --bitrate option
     if (parser.isSet("bitrate")) {
         preferences->bitrateKbps = parser.getIntOption("bitrate");
         if (!inRange(preferences->bitrateKbps, 500, 500000)) {
             fprintf(stderr, "Warning: Bitrate is out of the supported range (500 - 500000 Kbps). Performance may suffer!\n");
         }
-    } else if (displaySet || parser.isSet("fps")) {
+    } else if (displaySet || parser.isSet("fps") ||
+               (preferences->autoAdjustBitrate && preferences->enableYUV444 != savedYUV444)) {
+        // Like the settings UI, a chroma-only change recalculates the
+        // bitrate only when automatic adjustment is enabled
         preferences->bitrateKbps = preferences->getDefaultBitrate(
             preferences->width, preferences->height, preferences->fps, preferences->enableYUV444);
     }
@@ -488,9 +496,6 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --hdr and --no-hdr options
     preferences->enableHdr = parser.getToggleOptionValue("hdr", preferences->enableHdr);
 
-    // Resolve --yuv444 and --no-yuv444 options
-    preferences->enableYUV444 = parser.getToggleOptionValue("yuv444", preferences->enableYUV444);
-    
     // Resolve --capture-system-keys option
     if (parser.isSet("capture-system-keys")) {
         preferences->captureSysKeysMode = mapValue(m_CaptureSysKeysModeMap, parser.getChoiceOptionValue("capture-system-keys"));
