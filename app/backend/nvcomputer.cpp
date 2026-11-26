@@ -230,8 +230,10 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
         // Apollo sends a decimal mask; also accept an explicit 0x-prefixed one
         bool ok;
         const QString trimmed = permissionStr.trimmed();
+        // Base 16 accepts the 0x prefix itself, so a malformed value
+        // ("0x 100000", "0x0x10") fails instead of parsing as a fresh number
         this->serverPermissions = trimmed.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)
-                ? trimmed.mid(2).toUInt(&ok, 16)
+                ? trimmed.toUInt(&ok, 16)
                 : trimmed.toUInt(&ok, 10);
         if (ok) {
             qDebug() << "Apollo server permissions:" << QString("0x%1").arg(this->serverPermissions, 0, 16) << "(" << this->serverPermissions << ")";

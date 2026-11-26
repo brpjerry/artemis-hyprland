@@ -135,7 +135,11 @@ create_dev_config() {
         echo "📝 Keeping the existing ~/.config/artemis-dev/dev-settings.conf"
         return
     fi
-    cat > ~/.config/artemis-dev/dev-settings.conf << EOF
+    # Write to a temporary file and move it into place, so an interrupted
+    # write is retried on the next run instead of kept as "customized"
+    local tmp
+    tmp=$(mktemp ~/.config/artemis-dev/dev-settings.conf.XXXXXX) || return 1
+    if ! cat > "$tmp" << EOF
 # Artemis Qt Development Settings
 # This file contains development-specific settings
 
@@ -150,6 +154,12 @@ ClipboardSyncEnabled=false
 ServerCommandsEnabled=false
 OTPPairingEnabled=false
 EOF
+    then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -n "$tmp" ~/.config/artemis-dev/dev-settings.conf
+    rm -f "$tmp"
 
     echo "📝 Development configuration created at ~/.config/artemis-dev/"
 }
@@ -162,8 +172,10 @@ show_next_steps() {
     echo "🎯 Next steps:"
     echo "   1. Start implementing Artemis features (see docs/DEVELOPMENT.md)"
     if [[ "$OS" == "windows" || "$SKIP_BUILD" == true ]]; then
-        echo "   2. Build it (Windows needs the manual Qt Command Prompt build above),"
-        echo "      then run the application:"
+        echo "   2. Build it first. On Windows, from a Qt Command Prompt in the repository root:"
+        echo "        powershell -ExecutionPolicy Bypass -File setup-deps.ps1"
+        echo "        qmake6 artemis.pro CONFIG+=debug && nmake"
+        echo "      Elsewhere, rerun this script without --skip-build. Then run the application:"
     else
         echo "   2. Run the application:"
     fi
