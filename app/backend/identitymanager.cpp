@@ -67,11 +67,16 @@ void IdentityManager::createCredentials(QSettings& settings)
 
     X509_set_pubkey(cert, pk);
 
-    X509_NAME* name = X509_get_subject_name(cert);
+    // OpenSSL 4.0 returns a const X509_NAME* from X509_get_subject_name(),
+    // so build the name separately and copy it into the cert.
+    X509_NAME* name = X509_NAME_new();
+    THROW_BAD_ALLOC_IF_NULL(name);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
                                reinterpret_cast<unsigned char *>(const_cast<char*>("NVIDIA GameStream Client")),
                                -1, -1, 0);
+    X509_set_subject_name(cert, name);
     X509_set_issuer_name(cert, name);
+    X509_NAME_free(name);
 
     X509_sign(cert, pk, EVP_sha256());
 
