@@ -1029,10 +1029,7 @@ bool Session::initialize()
         // Set up the ServerCommandManager with the computer and HTTP client
         NvHTTP* httpClient = new NvHTTP(m_Computer);
         m_ServerCommandManager->setConnection(m_Computer, httpClient);
-        
-        // Set up the ClipboardManager with the same HTTP client
-        m_ClipboardManager->setConnection(m_Computer, httpClient);
-        
+
         // Connect the ServerCommandManager to the QuickMenuManager
         m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
         
@@ -1878,6 +1875,10 @@ void Session::exec(QWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
 
+    // The Qt event loop won't run during the stream, so Qt can't keep serving
+    // the clipboard. Let ClipboardManager move it to SDL for the stream.
+    m_ClipboardManager->prepareForStream();
+
     // Use a separate thread for the streaming session on X11 or Wayland
     // to ensure we don't stomp on Qt's GL context. This breaks when using
     // the Qt EGLFS backend, so we will restrict this to X11
@@ -2167,6 +2168,9 @@ void Session::execInternal()
     // Toggle the stats overlay if requested by the user
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
 
+    // Clipboard sync runs on this event loop, from here until DispatchDeferredCleanup
+    m_ClipboardManager->setConnection(m_Computer);
+
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
@@ -2183,6 +2187,7 @@ void Session::execInternal()
         // and other problems.
         if (!SDL_WaitEventTimeout(&event, 1000)) {
             presence.runCallbacks();
+            m_ClipboardManager->processStrandedWork();
             continue;
         }
 #else
@@ -2199,6 +2204,7 @@ void Session::execInternal()
             SDL_Delay(10);
 #endif
             presence.runCallbacks();
+            m_ClipboardManager->processStrandedWork();
             continue;
         }
 #endif
@@ -2243,6 +2249,9 @@ void Session::execInternal()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+            case SDL_CODE_CLIPBOARD_WAKE:
+                m_ClipboardManager->processPendingWork();
+                break;
             default:
                 SDL_assert(false);
             }
@@ -2256,16 +2265,16 @@ void Session::execInternal()
                     m_AudioMuted = true;
                 }
                 m_InputHandler->notifyFocusLost();
-                
-                // Trigger clipboard sync from server when focus is lost
-                if (m_ClipboardManager) {
-                    m_ClipboardManager->onFocusLost();
-                }
+
+                // Pull the host clipboard so it can be pasted locally
+                m_ClipboardManager->onStreamFocusLost();
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
                 if (m_Preferences->muteOnFocusLoss) {
                     m_AudioMuted = false;
                 }
+
+                m_ClipboardManager->onStreamFocusGained();
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
@@ -2457,6 +2466,12 @@ void Session::execInternal()
             SDL_AtomicUnlock(&m_DecoderLock);
             break;
 
+        case SDL_CLIPBOARDUPDATE:
+            // The local clipboard changed, or the compositor re-sent it when
+            // the stream window gained focus
+            m_ClipboardManager->onStreamClipboardUpdated();
+            break;
+
         case SDL_KEYUP:
         case SDL_KEYDOWN:
             presence.runCallbacks();
@@ -2509,9 +2524,18 @@ void Session::execInternal()
             m_InputHandler->handleTouchFingerEvent(&event.tfinger);
             break;
         }
+
+        // Per-frame events can keep the loop from ever idling, so check here
+        // too. After dispatch, so SDL_QUIT goes straight to cleanup and the
+        // clipboard and focus handlers keep their ordering.
+        m_ClipboardManager->processStrandedWork();
     }
 
 DispatchDeferredCleanup:
+    // Stop clipboard sync while the window and SDL video are still alive, so
+    // the clipboard can be handed over to Qt
+    m_ClipboardManager->disconnect();
+
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.
     m_InputHandler->setCaptureActive(false);

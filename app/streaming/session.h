@@ -120,10 +120,9 @@ public:
             delete m_ServerCommandManager;
             m_ServerCommandManager = nullptr;
         }
-        if (m_ClipboardManager) {
-            delete m_ClipboardManager;
-            m_ClipboardManager = nullptr;
-        }
+        // m_ClipboardManager is the shared process-wide instance. It is only
+        // connected while execInternal() runs the SDL event loop, so there is
+        // nothing to clean up here.
     };
 
     Q_INVOKABLE void exec(QWindow* qtWindow);
