@@ -2208,9 +2208,6 @@ void Session::execInternal()
             continue;
         }
 #endif
-        // Per-frame events can keep the loop from ever idling, so check here too
-        m_ClipboardManager->processStrandedWork();
-
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2527,6 +2524,11 @@ void Session::execInternal()
             m_InputHandler->handleTouchFingerEvent(&event.tfinger);
             break;
         }
+
+        // Per-frame events can keep the loop from ever idling, so check here
+        // too. After dispatch, so SDL_QUIT goes straight to cleanup and the
+        // clipboard and focus handlers keep their ordering.
+        m_ClipboardManager->processStrandedWork();
     }
 
 DispatchDeferredCleanup:

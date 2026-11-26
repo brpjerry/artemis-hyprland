@@ -315,8 +315,8 @@ void ClipboardManager::wakeStream()
     event.user.code = SDL_CODE_CLIPBOARD_WAKE;
 
     if (SDL_PushEvent(&event) != 1) {
-        // The work stays stored. The SDL loop picks it up when it's next idle
-        // (processStrandedWork()), or on the next clipboard or focus event.
+        // The work stays stored. The SDL loop checks for it on every
+        // iteration (processStrandedWork()).
         m_wakePosted = false;
         m_wakeFailed = true;
     }
@@ -410,8 +410,10 @@ void ClipboardManager::onStreamClipboardUpdated()
 void ClipboardManager::onStreamFocusGained()
 {
     // A copy made while the stream was in the background is offered on focus
-    // gain, possibly after a fetch completed: read it first, as above
-    processPendingWork(m_enabled);
+    // gain. Read it now if a fetch could overwrite it; otherwise a queued
+    // clipboard update reads it once for both notifications.
+    const bool readOffer = m_enabled && (m_fetchInFlight || !SDL_HasEvent(SDL_CLIPBOARDUPDATE));
+    processPendingWork(readOffer);
 }
 
 void ClipboardManager::onStreamFocusLost()
