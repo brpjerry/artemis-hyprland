@@ -730,9 +730,9 @@ void ClipboardManager::runHttpQueue()
                 uploadSucceeded = http.sendClipboardContent(job.text);
             }
             else {
-                // The limit counts the text's UTF-8 bytes, which is what the
-                // body carries. NvHTTP abandons a larger body mid-transfer,
-                // having kept no more of it than the limit.
+                // Apollo sends the text as UTF-8, so the byte limit applies
+                // to the response body. NvHTTP appends at most that many
+                // bytes and abandons a larger body.
                 fetchedContent = http.getClipboardContent(qMax(0, m_maxClipboardSize.load()));
                 fetchStatus = FetchStatus::Fetched;
             }

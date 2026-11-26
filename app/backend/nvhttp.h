@@ -98,27 +98,16 @@ private:
     QByteArray m_ErrorText;
 };
 
-// Thrown when a response body is larger than the limit the caller set. NvHTTP
-// aborted the transfer (hence OperationCanceledError) once that was evident,
-// having kept no more of the body than the limit.
+// Thrown when NvHTTP sees that a response body exceeds the caller's limit. It
+// abandons the transfer then (hence OperationCanceledError).
 class ResponseTooLargeException : public QtNetworkReplyException
 {
 public:
     explicit ResponseTooLargeException(qint64 limit) :
         QtNetworkReplyException(QNetworkReply::OperationCanceledError,
-                                QString("Response exceeds the %1-byte limit").arg(limit)),
-        m_Limit(limit)
+                                QString("Response exceeds the %1-byte limit").arg(limit))
     {
-
     }
-
-    qint64 getLimit() const
-    {
-        return m_Limit;
-    }
-
-private:
-    qint64 m_Limit;
 };
 
 class NvHTTP : public QObject

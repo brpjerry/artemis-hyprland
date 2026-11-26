@@ -59,8 +59,8 @@ Q_DECLARE_OPAQUE_POINTER(NvComputer*)
  *    but only if the host clipboard changed since the last sync, so a newer
  *    local copy is never overwritten with stale host content. A fetch waits
  *    for an upload in flight, and a fetch overtaken by a newer upload is
- *    dropped. A host clipboard over the size limit is abandoned mid-transfer
- *    and, like a failed fetch, leaves the local clipboard alone.
+ *    dropped. A host clipboard over the size limit is abandoned as soon as
+ *    that's evident and, like a failed fetch, leaves the local clipboard alone.
  *  - Manual upload/fetch requests (quick menu) force a sync.
  *
  * Clipboard ownership follows whichever event loop runs (regardless of the
@@ -166,7 +166,7 @@ private:
     {
         Fetched,
         Failed,
-        TooLarge, // Over the size limit, abandoned before it was read in full
+        TooLarge, // Over the size limit, abandoned once that was evident
     };
 
     // Work waiting for the SDL thread, guarded by m_lock

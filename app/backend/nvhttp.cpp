@@ -621,18 +621,18 @@ NvHTTP::openConnection(QUrl baseUrl,
     QNetworkReply* reply = m_Nam->get(request);
     QEventLoop loop;
 
-    // Read a bounded body out of the reply as it arrives, so an oversized one
-    // is never held in full, with or without a Content-Length (chunked or
-    // close-delimited bodies too). The small read buffer stops Qt reading
-    // from the connection until what's buffered has been taken, and taking it
-    // is what lets Qt read on. (Left in the reply, a body can stall short of
-    // the read buffer size, so a limit set there might never see the byte
-    // that proves a body oversized.)
+    // Read a bounded body out of the reply as it arrives: at most maxBytes
+    // are appended to boundedBody, and the transfer is abandoned as soon as
+    // more than that is seen, with or without a Content-Length (chunked or
+    // close-delimited bodies too). Qt may already hold the chunk that crosses
+    // the limit when that happens. The small read buffer keeps Qt from
+    // reading far ahead, and draining each accepted chunk is what lets it
+    // read on. (Left in the reply, a body can stall short of the read buffer
+    // size, so a limit set there might never see the first excess byte.)
     bool tooLarge = false;
     auto readBoundedBody = [reply, boundedBody, maxBytes, &tooLarge]() {
-        // A declared length rules the body out before any of it arrives. Qt
-        // removes the header when it decompresses a body, so it's the length
-        // of the body as read.
+        // A declared length can rule the body out as soon as the headers
+        // arrive. Qt removes Content-Length when it decompresses a body.
         bool lengthKnown = false;
         qint64 contentLength = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong(&lengthKnown);
         if ((lengthKnown && contentLength > maxBytes) ||
@@ -711,6 +711,20 @@ NvHTTP::openConnection(QUrl baseUrl,
     // Report an oversized body before the generic error handling below, which
     // would take the cancellation for a timeout
     if (tooLarge) {
+        // An HTTP error with a large body is still an HTTP error, not
+        // oversized content
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (httpStatus >= 400) {
+            if (logLevel >= NvLogLevel::NVLL_ERROR) {
+                qWarning() << command << "request failed with HTTP status" << httpStatus;
+            }
+
+            GfeHttpResponseException exception(httpStatus,
+                                               reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString());
+            delete reply;
+            throw exception;
+        }
+
         if (logLevel >= NvLogLevel::NVLL_ERROR) {
             qWarning() << command << "response exceeds the" << maxBytes << "byte limit, abandoned it";
         }
