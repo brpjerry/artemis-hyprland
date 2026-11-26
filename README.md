@@ -11,7 +11,7 @@ Artemis Qt is built upon the excellent foundation of [**Moonlight Qt**](https://
 - **Enhanced features inspiration** - [Artemis Android](https://github.com/ClassicOldSong/moonlight-android) by [ClassicOldSong](https://github.com/ClassicOldSong)
 - **Server compatibility** - [Apollo](https://github.com/ClassicOldSong/Apollo) and [Sunshine](https://github.com/LizardByte/Sunshine) projects
 
-[![Build Status](https://github.com/wjbeckett/artemis/workflows/Build%20Artemis%20Qt/badge.svg)](https://github.com/wjbeckett/artemis/actions)
+[![Arch Linux Package](https://github.com/brpjerry/artemis-hyprland/actions/workflows/arch-package.yml/badge.svg?branch=main)](https://github.com/brpjerry/artemis-hyprland/actions/workflows/arch-package.yml)
 [![Downloads](https://img.shields.io/github/downloads/wjbeckett/artemis/total)](https://github.com/wjbeckett/artemis/releases)
 
 ## 💖 Support the Project
@@ -255,13 +255,12 @@ Legend: ✅ Available, 🚧 In Development, 📋 Planned
 - **🎯 Input-Only Mode** - Remote control without video streaming for lightweight scenarios
 
 ### Development Process
-We now have **automated development builds** that:
-- 🔄 Build automatically on every development push
-- 📋 Generate detailed changelogs from commit messages
-- 🎯 Support all platforms (Windows, macOS, Linux, AppImage, Flatpak, Steam Deck)
-- ⚡ Let you test new features immediately
-
-Want to help test new features? Check out our [development releases](https://github.com/wjbeckett/artemis/releases?q=prerelease%3Atrue)!
+CI builds the Arch Linux x86_64 pacman package on every push to `main` and on
+every pull request (download it from the run's artifacts). Each `v*` tag
+publishes the package to [Releases](https://github.com/brpjerry/artemis-hyprland/releases),
+which also works as a pacman repository; see
+[`packaging/arch/README.md`](packaging/arch/README.md). Other platforms are
+not built in CI.
 
 ## 🤝 Contributing
 
