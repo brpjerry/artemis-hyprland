@@ -55,7 +55,10 @@ install_dependencies() {
                 echo "   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
                 exit 1
             fi
-            brew install qt6 ffmpeg opus sdl2 sdl2_ttf create-dmg
+            brew install qt6
+            # FFmpeg, SDL and the other libraries come from setup-deps.py (libs/mac).
+            # generate-dmg.sh uses the npm create-dmg, not Homebrew's tool of that name.
+            python3 setup-deps.py
             ;;
         "windows")
             echo "📦 Windows setup requires manual installation:"
@@ -74,6 +77,8 @@ install_dependencies() {
 # Function to initialize submodules
 init_submodules() {
     echo "📥 Initializing git submodules..."
+    # Sync first, so an existing checkout picks up changed submodule URLs
+    git submodule sync --recursive
     git submodule update --init --recursive
 }
 
@@ -109,7 +114,8 @@ build_project() {
             ;;
         "windows")
             echo "🔧 For Windows, use Qt Creator or run from Qt Command Prompt:"
-            echo "   qmake6 moonlight-qt.pro CONFIG+=debug"
+            echo "   powershell -ExecutionPolicy Bypass -File setup-deps.ps1"
+            echo "   qmake6 artemis.pro CONFIG+=debug"
             echo "   nmake"
             ;;
     esac

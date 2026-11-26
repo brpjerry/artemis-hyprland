@@ -151,8 +151,10 @@ int FFmpegVideoDecoder::getDecoderCapabilities()
                 {"hevc_omx", 0},
 
                 // AV1
-                {"av1_rkmpp", CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1},
-                {"av1_nvv4l2", CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1},
+                // Artemis additions. Reference frame invalidation is unverified for
+                // these AV1 decoders, so it isn't advertised (hevc_rkmpp has none either).
+                {"av1_rkmpp", 0},
+                {"av1_nvv4l2", 0},
                 {"av1_nvmpi", 0},
                 {"av1_v4l2m2m", 0},
                 {"av1_omx", 0},
@@ -520,31 +522,9 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
         // The backend renderer cannot directly render to the display, so
         // we will create an SDL or DRM renderer to draw the frames.
 
-        // Respect user's preferred frontend first where possible
-#ifdef HAVE_LIBPLACEBO_VULKAN
-        if (preferredBackend == StreamingPreferences::RB_VULKAN) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Renderer preference: Trying Vulkan (PlVkRenderer) frontend");
-            m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
-            if (initializeRendererInternal(m_FrontendRenderer, params)) {
-                return true;
-            }
-            delete m_FrontendRenderer;
-            m_FrontendRenderer = nullptr;
-        }
-#endif
-#ifdef HAVE_EGL
-        if (preferredBackend == StreamingPreferences::RB_OPENGL && m_BackendRenderer->canExportEGL()) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Renderer preference: Trying OpenGL (EGLRenderer) frontend");
-            m_FrontendRenderer = new EGLRenderer(m_BackendRenderer);
-            if (initializeRendererInternal(m_FrontendRenderer, params)) {
-                return true;
-            }
-            delete m_FrontendRenderer;
-            m_FrontendRenderer = nullptr;
-        }
-#endif
+        // The renderer preference was already tried in the alternate-frontend
+        // pass. This is the fallback after it failed (possibly its frame test),
+        // so don't retry the preferred renderer here.
 
 #ifdef HAVE_DRM
         if (glIsSlow || vulkanIsSlow) {

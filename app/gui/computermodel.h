@@ -7,6 +7,8 @@ class ComputerModel : public QAbstractListModel
 {
     Q_OBJECT
 
+public:
+    // Public and Q_ENUM so QML can pass ComputerModel.NameRole to data()
     enum Roles
     {
         NameRole = Qt::UserRole,
@@ -17,10 +19,11 @@ class ComputerModel : public QAbstractListModel
         StatusUnknownRole,
         ServerSupportedRole,
         DetailsRole,
-        ApolloVersionRole
+        ApolloVersionRole,
+        OTPSupportedRole
     };
+    Q_ENUM(Roles)
 
-public:
     explicit ComputerModel(QObject* object = nullptr);
 
     // Must be called before any QAbstractListModel functions
@@ -51,7 +54,8 @@ public:
     Q_INVOKABLE Session* createSessionForCurrentGame(int computerIndex);
 
 signals:
-    void pairingCompleted(QVariant error);
+    // computerIndex is the paired host's current row, or -1 if it is no longer listed
+    void pairingCompleted(QVariant error, int computerIndex);
     void connectionTestCompleted(int result, QString blockedPorts);
 
 private slots:

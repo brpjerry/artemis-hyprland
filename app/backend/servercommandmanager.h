@@ -82,30 +82,19 @@ public slots:
     void noCommandsAvailable(); // Matches Android dialog
 
 private slots:
-    void onCommandsReceived();
     void onCommandExecutionFinished();
 
 private:
     // Permission checking (matches Android ComputerDetails.Operations)
     bool checkServerCommandPermission();
     
-    // HTTP operations (placeholder for actual implementation)
-    void fetchAvailableCommands();
     void sendCommandExecution(const QString &commandId);
-    
-    // XML parsing
-    bool parseServerCommandsXml(const QByteArray &xmlData);
     
     // Streaming session state checking
     bool isStreamingSessionActive() const;
-    
-    // HTTP-based server command execution (Apollo server approach)
-    bool sendHttpServerCommand(const QString &commandId);
+
 
 private:
-    // Builtin commands (matches Android implementation)
-    static const QList<ServerCommand> BUILTIN_COMMANDS;
-    
     NvComputer *m_computer;
     NvHTTP *m_http;
     

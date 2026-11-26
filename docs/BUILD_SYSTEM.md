@@ -22,7 +22,7 @@ The Artemis build system produces comprehensive, production-ready installers for
   - `artemis-windows-arm64-portable-{version}.zip` (ARM64)
 
 ### macOS
-- **Universal DMG** (`artemis-macos-universal-{version}.dmg`)
+- **Universal DMG** (`Artemis-{version}.dmg`)
   - Native support for Intel (x86_64) and Apple Silicon (arm64)
   - Single installer for all Mac systems
   - Code signed and notarized (when credentials available)
@@ -31,7 +31,7 @@ The Artemis build system produces comprehensive, production-ready installers for
 ### Linux
 - **x86_64 Packages**
   - `artemis-linux-{version}.tar.gz` (Basic binary)
-  - `artemis-appimage-{version}-x86_64.AppImage` (Portable)
+  - `Artemis-{version}-x86_64.AppImage` (Portable)
   - `artemis-flatpak-{version}.flatpak` (Sandboxed)
 
 - **ARM64 Packages**  
@@ -58,6 +58,7 @@ The Artemis build system produces comprehensive, production-ready installers for
 
 ### macOS  
 - `scripts/generate-dmg.sh` - Universal DMG generation
+- Fetches the prebuilt universal dependencies into `libs/mac` with `setup-deps.py`
 - Automatically builds fat binaries with both architectures
 - Handles code signing and notarization
 
@@ -70,6 +71,9 @@ The Artemis build system produces comprehensive, production-ready installers for
 
 ### Building Universal Windows Installer
 ```batch
+# Fetch the prebuilt dependencies into libs\windows
+powershell .\setup-deps.ps1
+
 # Build x64 version
 scripts\build-artemis-arch.bat release
 
@@ -126,8 +130,8 @@ for local builds.
 
 ### Development Environment
 - **Windows**: Visual Studio 2022, Qt 6.8+, WiX Toolset v5
-- **macOS**: Xcode, Qt 6.8+, create-dmg
-- **Linux**: GCC, Qt 6.8+, Cross-compilation tools for ARM64
+- **macOS**: Xcode, Qt 6.8+, [create-dmg](https://github.com/sindresorhus/create-dmg) from npm (`npm install --global create-dmg`; Homebrew's `create-dmg` is a different tool)
+- **Linux**: GCC, Qt 6.8+, Cross-compilation tools for ARM64; for the AppImage, `qmake6` plus `linuxdeploy-<arch>.AppImage` and `linuxdeploy-plugin-qt-<arch>.AppImage` on `PATH`
 
 ### Runtime Dependencies
 All builds include or automatically install required runtime components:
