@@ -61,7 +61,8 @@ Q_DECLARE_OPAQUE_POINTER(NvComputer*)
  *    for an upload in flight, and a fetch overtaken by a newer upload is
  *    dropped. A host clipboard over the size limit is abandoned as soon as
  *    that's evident and, like a failed fetch, leaves the local clipboard alone.
- *  - Manual upload/fetch requests (quick menu) force a sync.
+ *  - Manual upload/fetch requests (quick menu) force a sync, and report
+ *    how they went with manualRequestFinished().
  *
  * Clipboard ownership follows whichever event loop runs (regardless of the
  * sync settings): text that Qt owns when a stream starts is taken over by SDL
@@ -115,7 +116,8 @@ public:
 
     // Manual sync, callable from any thread (e.g. the quick menu). These only
     // queue a request for the SDL thread and return whether a stream is
-    // running to take it.
+    // running to take it. The SDL thread then emits manualRequestFinished()
+    // once the request is done or turns out it can't be made.
     Q_INVOKABLE bool sendClipboard(bool force = true);
     Q_INVOKABLE bool getClipboard();
 
@@ -138,6 +140,10 @@ signals:
     void textOnlyModeChanged();
     void maxContentSizeMBChanged();
     void bidirectionalSyncChanged();
+
+    // SDL thread: a sendClipboard() (upload) or getClipboard() request
+    // finished. message says what happened, for the user.
+    void manualRequestFinished(bool upload, bool succeeded, const QString &message);
 
 private:
     // Connection parameters copied from the NvComputer when work is queued,
@@ -192,14 +198,16 @@ private:
     void onAboutToQuit();
     void onQtClipboardChanged(QClipboard::Mode mode); // GUI thread
 
-    // SDL thread
-    void uploadLocalClipboard(bool force);
-    void startUpload(const QString &text, bool force);
-    void requestFetch(bool force);
+    // SDL thread. manual marks a sendClipboard()/getClipboard() request,
+    // which reports its result.
+    void uploadLocalClipboard(bool force, bool manual = false);
+    void startUpload(const QString &text, bool force, bool manual = false);
+    void requestFetch(bool force, bool manual = false);
     void startDeferredFetch();
     void handleUploadResult(bool success, const QByteArray &hash);
     void handleFetchResult(FetchStatus status, const QString &content, bool force);
-    void applyFetchedClipboard(const QString &content, bool force);
+    bool applyFetchedClipboard(const QString &content, bool force, QString *outcome);
+    void reportManualResult(bool upload, bool succeeded, const QString &message);
     void takeOverQtClipboard(const QString &text);
     void handOffLocalClipboard();
     void resetStreamState();
@@ -213,6 +221,7 @@ private:
     void runHttpQueue();
 
     static QByteArray contentHash(const QByteArray &utf8);
+    static QString formatSize(qint64 bytes);
 
     static constexpr int DEFAULT_MAX_SIZE = 1048576; // 1 MiB
 
@@ -245,11 +254,15 @@ private:
     bool m_hostAcceptsUpload = false;
     bool m_hostServesFetch = false;
     bool m_uploadInFlight;
+    bool m_uploadInFlightManual = false; // It was a manual request, to report
     QString m_pendingUploadText; // Newest local copy made while an upload was in flight
     bool m_pendingUploadForced;
+    bool m_pendingUploadManual = false;
     bool m_fetchInFlight;
+    bool m_fetchInFlightManual = false;
     bool m_fetchSuperseded; // An upload started while the fetch in flight was running
     PendingFetch m_pendingFetch; // Fetch to run once no request is in flight
+    bool m_pendingFetchManual = false;
 
     static ClipboardManager* s_instance;
 };
