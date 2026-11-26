@@ -401,7 +401,7 @@ void ClipboardManager::processPendingWork(bool uploadCurrentOffer)
         handleUploadResult(work.uploadSucceeded, work.uploadHash);
     }
     if (work.hasFetchResult) {
-        handleFetchResult(work.fetchedContent, work.fetchForced);
+        handleFetchResult(work.fetchStatus, work.fetchedContent, work.fetchForced);
     }
     if (work.manualUpload) {
         uploadLocalClipboard(work.manualUploadForced);
@@ -600,7 +600,7 @@ void ClipboardManager::handleUploadResult(bool success, const QByteArray &hash)
     }
 }
 
-void ClipboardManager::handleFetchResult(const QString &content, bool force)
+void ClipboardManager::handleFetchResult(FetchStatus status, const QString &content, bool force)
 {
     m_fetchInFlight = false;
 
@@ -616,13 +616,26 @@ void ClipboardManager::handleFetchResult(const QString &content, bool force)
         return;
     }
 
-    applyFetchedClipboard(content, force);
+    // A failed or abandoned fetch tells nothing about the host's clipboard, so
+    // the local clipboard and the sync state stay as they are. Neither is
+    // retried: the next focus loss or manual request fetches again.
+    switch (status) {
+    case FetchStatus::Fetched:
+        applyFetchedClipboard(content, force);
+        break;
+    case FetchStatus::TooLarge:
+        qWarning() << "ClipboardManager: Host clipboard is over the size limit, keeping the local clipboard";
+        break;
+    case FetchStatus::Failed:
+        // The worker logged why
+        break;
+    }
 }
 
 void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
 {
     if (content.isEmpty()) {
-        qDebug() << "ClipboardManager: Host clipboard is empty or unavailable";
+        qDebug() << "ClipboardManager: Host clipboard has no text";
         return;
     }
 
@@ -634,6 +647,8 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
         return;
     }
     if (utf8.size() > m_maxClipboardSize) {
+        // NvHTTP already bounds the body to the limit. Text can still grow
+        // here if the host sent invalid UTF-8, which decodes to U+FFFD.
         qWarning() << "ClipboardManager: Host clipboard too large:" << utf8.size() << "bytes";
         return;
     }
@@ -708,14 +723,29 @@ void ClipboardManager::runHttpQueue()
         NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert, job.endpoint.useTrueUid);
 
         bool uploadSucceeded = false;
+        FetchStatus fetchStatus = FetchStatus::Failed;
         QString fetchedContent;
         try {
             if (job.kind == HttpJob::Kind::Upload) {
                 uploadSucceeded = http.sendClipboardContent(job.text);
             }
             else {
-                fetchedContent = http.getClipboardContent();
+                // The limit counts the text's UTF-8 bytes, which is what the
+                // body carries. NvHTTP abandons a larger body mid-transfer,
+                // having kept no more of it than the limit.
+                fetchedContent = http.getClipboardContent(qMax(0, m_maxClipboardSize.load()));
+                fetchStatus = FetchStatus::Fetched;
             }
+        }
+        catch (const ResponseTooLargeException&) {
+            // Logged by NvHTTP and reported by handleFetchResult()
+            fetchStatus = FetchStatus::TooLarge;
+        }
+        catch (const GfeHttpResponseException& e) {
+            qWarning() << "ClipboardManager: Failed to fetch host clipboard:" << e.toQString();
+        }
+        catch (const QtNetworkReplyException& e) {
+            qWarning() << "ClipboardManager: Failed to fetch host clipboard:" << e.toQString();
         }
         catch (...) {
             qWarning() << "ClipboardManager: Unexpected exception during clipboard request";
@@ -734,6 +764,7 @@ void ClipboardManager::runHttpQueue()
             }
             else {
                 m_pending.hasFetchResult = true;
+                m_pending.fetchStatus = fetchStatus;
                 m_pending.fetchForced = job.force;
                 m_pending.fetchedContent = fetchedContent;
             }
