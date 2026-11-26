@@ -100,6 +100,7 @@ void ClipboardManager::resetStreamState()
     m_lastSyncedHash.clear();
     m_localUnconfirmed = false;
     m_textSetThroughSdl.clear();
+    m_coveredClipboardUpdates = 0;
     m_uploadInFlight = false;
     m_pendingUploadText.clear();
     m_pendingUploadForced = false;
@@ -406,17 +407,26 @@ void ClipboardManager::processPendingWork(bool uploadCurrentOffer)
 
 void ClipboardManager::onStreamClipboardUpdated()
 {
+    if (m_coveredClipboardUpdates > 0) {
+        // Already read by the focus-gain read that preceded it
+        --m_coveredClipboardUpdates;
+        return;
+    }
     processPendingWork(m_enabled);
 }
 
 void ClipboardManager::onStreamFocusGained()
 {
     // A copy made while the stream was in the background is offered on focus
-    // gain. Read the current offer once, before completions are processed:
-    // SDL clipboard updates carry no text, so this read also covers the ones
-    // already queued, which are dropped.
-    if (m_enabled) {
-        SDL_FlushEvent(SDL_CLIPBOARDUPDATE);
+    // gain. Read the current offer once, before completions are processed.
+    // SDL clipboard updates carry no text, so a successful read also covers
+    // the ones already queued (but not any queued during the read); a failed
+    // read resets this so they read again.
+    m_coveredClipboardUpdates = m_enabled
+        ? SDL_PeepEvents(nullptr, 0, SDL_PEEKEVENT, SDL_CLIPBOARDUPDATE, SDL_CLIPBOARDUPDATE)
+        : 0;
+    if (m_coveredClipboardUpdates < 0) {
+        m_coveredClipboardUpdates = 0;
     }
     processPendingWork(m_enabled);
 }
@@ -444,6 +454,8 @@ void ClipboardManager::uploadLocalClipboard(bool force)
     SDL_free(rawText);
 
     if (utf8.isEmpty()) {
+        // The read may have failed: let queued clipboard updates read again
+        m_coveredClipboardUpdates = 0;
         if (force) {
             qDebug() << "ClipboardManager: No text on the local clipboard to upload";
         }
@@ -475,7 +487,9 @@ void ClipboardManager::uploadLocalClipboard(bool force)
 void ClipboardManager::startUpload(const QString &text, bool force)
 {
     const QByteArray hash = contentHash(text.toUtf8());
-    if (!force && hash == m_lastSyncedHash) {
+    // After a failed upload, resend even the last synced text: its
+    // acknowledgement is what re-enables automatic fetches
+    if (!force && !m_localUnconfirmed && hash == m_lastSyncedHash) {
         // Already on the host (including our own SDL_SetClipboardText() echo)
         return;
     }
@@ -507,6 +521,14 @@ void ClipboardManager::requestFetch(bool force)
         if (force || m_pendingFetch == PendingFetch::None) {
             m_pendingFetch = force ? PendingFetch::Forced : PendingFetch::IfChanged;
         }
+        return;
+    }
+
+    if (!force && m_localUnconfirmed) {
+        // An upload of a newer local copy failed (possibly the session's
+        // first, with no synced hash yet), so the host's text is older. Don't
+        // spend the serial HTTP worker on a result that would be discarded.
+        qDebug() << "ClipboardManager: Keeping the local copy the host hasn't confirmed";
         return;
     }
 
@@ -605,12 +627,6 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
         // The host hasn't changed its clipboard since the last sync. Don't
         // replace anything copied locally since then with stale host content.
         qDebug() << "ClipboardManager: Host clipboard unchanged since last sync";
-        return;
-    }
-    if (!force && m_localUnconfirmed) {
-        // An upload of a newer local copy failed (possibly the session's
-        // first, with no synced hash yet), so the host's text is older
-        qDebug() << "ClipboardManager: Keeping the local copy the host hasn't confirmed";
         return;
     }
 
