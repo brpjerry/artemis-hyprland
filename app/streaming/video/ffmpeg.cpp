@@ -389,9 +389,12 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
     // The alternate frontend logic is primarily for cases where a different renderer like EGL or DRM
     // may provide additional performance or HDR capabilities. Neither of these are true for Vulkan.
     if (useAlternateFrontend && m_BackendRenderer->getRendererType() != IFFmpegRenderer::RendererType::Vulkan) {
-        // Respect user's preferred frontend renderer first, then fall back to existing logic
+        // Respect the user's preferred frontend for SDR. 10-bit streams go
+        // through the HDR-capability checks below, so a preferred renderer
+        // without HDR support can't disable HDR.
+        const bool sdrStream = !(params->videoFormat & VIDEO_FORMAT_MASK_10BIT);
 #ifdef HAVE_LIBPLACEBO_VULKAN
-        if (preferredBackend == StreamingPreferences::RB_VULKAN) {
+        if (sdrStream && preferredBackend == StreamingPreferences::RB_VULKAN) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Renderer preference: Trying Vulkan (PlVkRenderer) as frontend first");
             m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
@@ -403,7 +406,7 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
         }
 #endif
 #ifdef HAVE_EGL
-        if (preferredBackend == StreamingPreferences::RB_OPENGL && m_BackendRenderer->canExportEGL()) {
+        if (sdrStream && preferredBackend == StreamingPreferences::RB_OPENGL && m_BackendRenderer->canExportEGL()) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Renderer preference: Trying OpenGL (EGLRenderer) as frontend first");
             m_FrontendRenderer = new EGLRenderer(m_BackendRenderer);
@@ -540,8 +543,11 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
 
 #ifdef HAVE_EGL
         // We explicitly skipped EGL in the GL_IS_SLOW case above.
-        // If DRM didn't work either, try EGL now.
-        if (glIsSlow && m_BackendRenderer->canExportEGL()) {
+        // If DRM didn't work either, try EGL now, unless the OpenGL preference
+        // already tried it (and its frame test failed) in the alternate pass.
+        if (glIsSlow && m_BackendRenderer->canExportEGL() &&
+                !(preferredBackend == StreamingPreferences::RB_OPENGL &&
+                  !(params->videoFormat & VIDEO_FORMAT_MASK_10BIT))) {
             m_FrontendRenderer = new EGLRenderer(m_BackendRenderer);
             if (initializeRendererInternal(m_FrontendRenderer, params)) {
                 return true;

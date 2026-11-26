@@ -250,24 +250,6 @@ Rectangle {
             action: "toggle_stats"
             description: qsTr("Show/hide performance statistics")
         }
-        ListElement {
-            text: qsTr("Toggle Mouse Capture")
-            icon: "🖱"
-            action: "toggle_mouse"
-            description: qsTr("Toggle mouse capture mode")
-        }
-        ListElement {
-            text: qsTr("Toggle Keyboard Capture")
-            icon: "⌨"
-            action: "toggle_keyboard"
-            description: qsTr("Toggle keyboard capture mode")
-        }
-        ListElement {
-            text: qsTr("Toggle Fullscreen")
-            icon: "🖥"
-            action: "toggle_fullscreen"
-            description: qsTr("Toggle fullscreen mode")
-        }
     }
     
     function closeMenuDelayed() {

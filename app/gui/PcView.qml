@@ -513,6 +513,18 @@ CenteredGridView {
         }
     }
 
+    // Host discovery can reorder or replace the rows while the OTP dialog is
+    // open, so its saved row could point at another PC. Close it instead; the
+    // user can reopen it for the intended host.
+    Connections {
+        target: computerModel
+        function onModelAboutToBeReset() {
+            if (otpPairDialog.opened) {
+                otpPairDialog.reject()
+            }
+        }
+    }
+
     NavigableDialog {
         id: otpPairDialog
         property int computerIndex: -1

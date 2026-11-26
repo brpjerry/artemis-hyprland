@@ -47,8 +47,9 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
     case ApolloVersionRole:
         return computer->apolloVersion;
     case OTPSupportedRole:
-        // Same rule as isOTPSupported(), exposed as a role so QML bindings update
-        return !computer->isNvidiaServerSoftware;
+        // Apollo only: it advertises ApolloVersion and/or an Apollo Permission
+        // mask in serverinfo. Sunshine and GFE report neither and can't do OTP.
+        return !computer->apolloVersion.isEmpty() || computer->serverPermissions != 0;
     case DetailsRole: {
         QString state, pairState;
 
