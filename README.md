@@ -153,16 +153,20 @@ This is normal for development builds and doesn't indicate actual damage to the 
 
 ### Quick Start
 ```bash
-# Clone the repository
-git clone https://github.com/wjbeckett/artemis.git
-cd artemis
+# Clone the repository (with its submodules)
+git clone --recursive https://github.com/brpjerry/artemis-hyprland.git
+cd artemis-hyprland
 
 # Run the development setup script
 chmod +x scripts/setup-dev.sh
 ./scripts/setup-dev.sh
 
-# The script will install dependencies and build the project
+# The script installs dependencies and, on Linux and macOS, builds the project.
+# On Windows it prints the manual build commands instead.
 ```
+
+On Arch Linux you can install the prebuilt pacman package instead; see
+[`packaging/arch/README.md`](packaging/arch/README.md).
 
 ### Manual Build Requirements
 
@@ -178,17 +182,24 @@ chmod +x scripts/setup-dev.sh
 **Windows:**
 - Visual Studio 2022 with MSVC
 - 7-Zip (for packaging)
+- Run `powershell .\setup-deps.ps1` from the repository root before configuring a build. It downloads the prebuilt dependencies into `libs\windows`.
 
 **macOS:**
-- Xcode 14+
-- Homebrew: `brew install qt6 ffmpeg opus sdl2 sdl2_ttf create-dmg`
+- Xcode 15+ with the macOS 14 SDK (the Metal renderer uses `CAMetalDisplayLinkDelegate`)
+- Qt 6. Homebrew's `brew install qt6` is enough for a native development build; the
+  universal DMG (`scripts/generate-dmg.sh`, x86_64 + arm64) needs a universal Qt, such as
+  the one from the official Qt installer.
+- Run `python3 setup-deps.py` from the repository root before configuring a build. It downloads the prebuilt universal dependencies into `libs/mac`.
+- [create-dmg](https://github.com/sindresorhus/create-dmg) from npm (`npm install --global create-dmg`), only for `scripts/generate-dmg.sh`. Homebrew's `create-dmg` formula is a different tool.
 
 **Linux:**
 ```bash
 # Ubuntu/Debian
 sudo apt install qt6-base-dev qt6-declarative-dev libqt6svg6-dev \
   qml6-module-qtquick-controls qml6-module-qtquick-templates \
-  qml6-module-qtquick-layouts libegl1-mesa-dev libgl1-mesa-dev \
+  qml6-module-qtquick-layouts qml6-module-qtqml-workerscript \
+  qml6-module-qtquick-window qml6-module-qtquick \
+  libegl1-mesa-dev libgl1-mesa-dev \
   libopus-dev libsdl2-dev libsdl2-ttf-dev libssl-dev \
   libavcodec-dev libavformat-dev libswscale-dev libva-dev \
   libvdpau-dev libxkbcommon-dev wayland-protocols libdrm-dev
@@ -202,11 +213,16 @@ sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \
 
 ### Build Commands
 ```bash
-# Initialize submodules
+# Initialize submodules (sync first, so an existing checkout follows changed URLs)
+git submodule sync --recursive
 git submodule update --init --recursive
 
+# Windows and macOS only: fetch the prebuilt dependencies into libs/
+powershell .\setup-deps.ps1  # Windows
+python3 setup-deps.py  # macOS
+
 # Configure and build
-qmake6 moonlight-qt.pro CONFIG+=release
+qmake6 artemis.pro CONFIG+=release
 make -j$(nproc)  # Linux
 make -j$(sysctl -n hw.ncpu)  # macOS
 nmake  # Windows

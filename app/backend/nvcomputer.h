@@ -114,7 +114,7 @@ public:
     QVector<NvApp> appList;
     bool isNvidiaServerSoftware;
     QStringList serverCommands;
-    quint32 serverPermissions;
+    quint32 serverPermissions = 0; // Apollo's Permission bitmask; 0 for other hosts
     // Remember to update isEqualSerialized() when adding fields here!
     QString apolloVersion;
 

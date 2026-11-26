@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QReadWriteLock>
 
 #include "SDL_compat.h"
 #include <SDL_ttf.h>
@@ -42,18 +43,20 @@ public:
 
 private:
     void notifyOverlayUpdated(OverlayType type);
+    SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
 
     struct {
         bool enabled;
         int fontSize;
         SDL_Color color;
-        char text[512];
+        char text[1024];
 
         TTF_Font* font;
         SDL_Surface* surface;
     } m_Overlays[OverlayMax];
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;
+    QReadWriteLock m_OverlayRendererLock;
 };
 
 }

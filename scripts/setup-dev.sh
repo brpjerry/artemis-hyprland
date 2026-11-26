@@ -55,7 +55,10 @@ install_dependencies() {
                 echo "   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
                 exit 1
             fi
-            brew install qt6 ffmpeg opus sdl2 sdl2_ttf create-dmg
+            brew install qt6
+            # FFmpeg, SDL and the other libraries come from setup-deps.py (libs/mac).
+            # generate-dmg.sh uses the npm create-dmg, not Homebrew's tool of that name.
+            python3 setup-deps.py
             ;;
         "windows")
             echo "📦 Windows setup requires manual installation:"
@@ -74,6 +77,8 @@ install_dependencies() {
 # Function to initialize submodules
 init_submodules() {
     echo "📥 Initializing git submodules..."
+    # Sync first, so an existing checkout picks up changed submodule URLs
+    git submodule sync --recursive
     git submodule update --init --recursive
 }
 
@@ -83,8 +88,9 @@ build_project() {
     
     # Clean any existing build files
     echo "🧹 Cleaning previous builds..."
-    rm -f .qmake.stash .qmake.cache
-    find . -name "Makefile*" -delete 2>/dev/null || true
+    # qmake regenerates the Makefiles (qmake_all below); don't delete them
+    # across the tree, and keep .qmake.cache, which may hold local settings
+    rm -f .qmake.stash
     
     case $OS in
         "linux"|"macos")
@@ -98,8 +104,11 @@ build_project() {
             fi
             
             echo "🔧 Running qmake..."
-            $QMAKE moonlight-qt.pro CONFIG+=debug
-            
+            $QMAKE artemis.pro CONFIG+=debug
+            # Regenerate the subprojects' Makefiles too, so an earlier
+            # configuration (another Qt kit, release) isn't reused
+            make qmake_all
+
             echo "🔨 Compiling..."
             if [[ "$OS" == "macos" ]]; then
                 make -j$(sysctl -n hw.ncpu)
@@ -109,7 +118,8 @@ build_project() {
             ;;
         "windows")
             echo "🔧 For Windows, use Qt Creator or run from Qt Command Prompt:"
-            echo "   qmake6 moonlight-qt.pro CONFIG+=debug"
+            echo "   powershell -ExecutionPolicy Bypass -File setup-deps.ps1"
+            echo "   qmake6 artemis.pro CONFIG+=debug"
             echo "   nmake"
             ;;
     esac
@@ -119,9 +129,17 @@ build_project() {
 create_dev_config() {
     echo "⚙️  Creating development configuration..."
     
-    # Create a development settings file
+    # Create a development settings file, once: don't overwrite local changes
     mkdir -p ~/.config/artemis-dev
-    cat > ~/.config/artemis-dev/dev-settings.conf << EOF
+    if [[ -f ~/.config/artemis-dev/dev-settings.conf ]]; then
+        echo "📝 Keeping the existing ~/.config/artemis-dev/dev-settings.conf"
+        return
+    fi
+    # Write to a temporary file and move it into place, so an interrupted
+    # write is retried on the next run instead of kept as "customized"
+    local tmp
+    tmp=$(mktemp ~/.config/artemis-dev/dev-settings.conf.XXXXXX) || return 1
+    if ! cat > "$tmp" << EOF
 # Artemis Qt Development Settings
 # This file contains development-specific settings
 
@@ -136,6 +154,12 @@ ClipboardSyncEnabled=false
 ServerCommandsEnabled=false
 OTPPairingEnabled=false
 EOF
+    then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -n "$tmp" ~/.config/artemis-dev/dev-settings.conf
+    rm -f "$tmp"
 
     echo "📝 Development configuration created at ~/.config/artemis-dev/"
 }
@@ -146,18 +170,25 @@ show_next_steps() {
     echo "✅ Development environment setup complete!"
     echo ""
     echo "🎯 Next steps:"
-    echo "   1. Start implementing Artemis features (see DEVELOPMENT.md)"
-    echo "   2. Run the application:"
-    
+    echo "   1. Start implementing Artemis features (see docs/DEVELOPMENT.md)"
+    if [[ "$OS" == "windows" || "$SKIP_BUILD" == true ]]; then
+        echo "   2. Build it first. On Windows, from a Qt Command Prompt in the repository root:"
+        echo "        powershell -ExecutionPolicy Bypass -File setup-deps.ps1"
+        echo "        qmake6 artemis.pro CONFIG+=debug && nmake"
+        echo "      Elsewhere, rerun this script without --skip-build. Then run the application:"
+    else
+        echo "   2. Run the application:"
+    fi
+
     case $OS in
         "linux")
-            echo "      ./app/moonlight"
+            echo "      ./app/artemis"
             ;;
         "macos")
-            echo "      open app/Moonlight.app"
+            echo "      open app/Artemis.app"
             ;;
         "windows")
-            echo "      app\\debug\\moonlight.exe"
+            echo "      app\\debug\\artemis.exe"
             ;;
     esac
     
@@ -167,7 +198,7 @@ show_next_steps() {
     echo "      - OTP pairing"
     echo ""
     echo "📚 Documentation:"
-    echo "   - Development guide: DEVELOPMENT.md"
+    echo "   - Development guide: docs/DEVELOPMENT.md"
     echo "   - Contributing: CONTRIBUTING.md"
     echo "   - Artemis Android reference: https://github.com/ClassicOldSong/moonlight-android"
     echo ""
@@ -180,8 +211,8 @@ main() {
     echo ""
     
     # Check if we're in the right directory
-    if [[ ! -f "moonlight-qt.pro" ]]; then
-        echo "❌ Error: moonlight-qt.pro not found."
+    if [[ ! -f "artemis.pro" ]]; then
+        echo "❌ Error: artemis.pro not found."
         echo "   Please run this script from the root of the Artemis Qt repository."
         exit 1
     fi

@@ -24,7 +24,7 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
         return QVariant();
     }
 
-    Q_ASSERT(index.row() < m_Computers.count());
+    Q_ASSERT(index.row() >= 0 && index.row() < m_Computers.count());
 
     NvComputer* computer = m_Computers[index.row()];
     QReadLocker lock(&computer->lock);
@@ -46,6 +46,10 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
         return computer->isSupportedServerVersion;
     case ApolloVersionRole:
         return computer->apolloVersion;
+    case OTPSupportedRole:
+        // The same rule as PcView's click path, which offers OTP only when the
+        // host advertises ApolloVersion. Sunshine and GFE never do.
+        return !computer->apolloVersion.isEmpty();
     case DetailsRole: {
         QString state, pairState;
 
@@ -145,13 +149,14 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[ServerSupportedRole] = "serverSupported";
     names[DetailsRole] = "details";
     names[ApolloVersionRole] = "apolloVersion";
+    names[OTPSupportedRole] = "otpSupported";
 
     return names;
 }
 
 Session* ComputerModel::createSessionForCurrentGame(int computerIndex)
 {
-    Q_ASSERT(computerIndex < m_Computers.count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
 
     NvComputer* computer = m_Computers[computerIndex];
 
@@ -171,7 +176,7 @@ Session* ComputerModel::createSessionForCurrentGame(int computerIndex)
 
 void ComputerModel::deleteComputer(int computerIndex)
 {
-    Q_ASSERT(computerIndex < m_Computers.count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
 
     beginRemoveRows(QModelIndex(), computerIndex, computerIndex);
 
@@ -201,7 +206,7 @@ private:
 
 void ComputerModel::wakeComputer(int computerIndex)
 {
-    Q_ASSERT(computerIndex < m_Computers.count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
 
     DeferredWakeHostTask* wakeTask = new DeferredWakeHostTask(m_Computers[computerIndex]);
     QThreadPool::globalInstance()->start(wakeTask);
@@ -209,7 +214,7 @@ void ComputerModel::wakeComputer(int computerIndex)
 
 void ComputerModel::renameComputer(int computerIndex, QString name)
 {
-    Q_ASSERT(computerIndex < m_Computers.count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
 
     m_ComputerManager->renameHost(m_Computers[computerIndex], name);
 }
@@ -250,7 +255,7 @@ void ComputerModel::testConnectionForComputer(int)
 
 void ComputerModel::pairComputer(int computerIndex, QString pin)
 {
-    Q_ASSERT(computerIndex < m_Computers.count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
 
     m_ComputerManager->pairHost(m_Computers[computerIndex], pin);
 }
@@ -273,10 +278,12 @@ bool ComputerModel::isOTPSupported(int computerIndex)
     return !computer->isNvidiaServerSoftware;
 }
 
-void ComputerModel::handlePairingCompleted(NvComputer*, QString error)
+void ComputerModel::handlePairingCompleted(NvComputer* computer, QString error)
 {
     qDebug() << "ComputerModel::handlePairingCompleted called with error:" << error;
-    emit pairingCompleted(error.isEmpty() ? QVariant() : error);
+    // Look the host up now rather than trusting an index saved when pairing
+    // started, since the list may have been reordered or changed since then.
+    emit pairingCompleted(error.isEmpty() ? QVariant() : error, m_Computers.indexOf(computer));
     qDebug() << "ComputerModel: Emitted pairingCompleted signal";
 }
 

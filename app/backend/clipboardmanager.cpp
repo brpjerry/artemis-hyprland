@@ -1,6 +1,7 @@
 #include "clipboardmanager.h"
 #include "nvcomputer.h"
 #include "nvhttp.h"
+#include "serverpermissions.h"
 #include "settings/artemissettings.h"
 #include "SDL_compat.h"
 
@@ -174,9 +175,16 @@ void ClipboardManager::setConnection(NvComputer *computer)
         takeOverQtClipboard(textFromQt);
     }
 
+    // Only Apollo reports a Permission mask in serverinfo, so Sunshine and GFE
+    // hosts get no clipboard requests at all
+    m_hostAcceptsUpload = false;
+    m_hostServesFetch = false;
     if (computer) {
         QReadLocker lock(&computer->lock);
-        qDebug() << "ClipboardManager: Connected to" << computer->name;
+        m_hostAcceptsUpload = (computer->serverPermissions & ServerPermissions::CLIPBOARD_SET) != 0;
+        m_hostServesFetch = (computer->serverPermissions & ServerPermissions::CLIPBOARD_READ) != 0;
+        qDebug() << "ClipboardManager: Connected to" << computer->name
+                 << "- upload:" << m_hostAcceptsUpload << "fetch:" << m_hostServesFetch;
     }
 
     if (changed) {
@@ -292,6 +300,7 @@ bool ClipboardManager::currentEndpoint(Endpoint *endpoint, quint64 *generation) 
     endpoint->address = computer->activeAddress;
     endpoint->httpsPort = computer->activeHttpsPort;
     endpoint->serverCert = computer->serverCert;
+    endpoint->useTrueUid = !computer->isNvidiaServerSoftware;
 
     if (endpoint->address.isNull()) {
         qWarning() << "ClipboardManager: Host has no active address";
@@ -444,6 +453,10 @@ void ClipboardManager::uploadLocalClipboard(bool force)
     if (!isConnected()) {
         return;
     }
+    if (!m_hostAcceptsUpload) {
+        // Not an Apollo host, or this client may not set its clipboard
+        return;
+    }
 
     // Read the offer now: SDL can lose it (e.g. on focus loss) before an
     // upload in flight finishes. SDL returns an empty string if there's no
@@ -513,6 +526,10 @@ void ClipboardManager::startUpload(const QString &text, bool force)
 
 void ClipboardManager::requestFetch(bool force)
 {
+    if (!m_hostServesFetch) {
+        // Not an Apollo host, or this client may not read its clipboard
+        return;
+    }
     if (m_uploadInFlight || m_fetchInFlight) {
         // Fetch once the current request finishes, so the result reflects any
         // upload in flight. Coalesce with an earlier deferred fetch, keeping
@@ -688,7 +705,7 @@ void ClipboardManager::runHttpQueue()
             m_httpQueue.pop_front();
         }
 
-        NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert);
+        NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert, job.endpoint.useTrueUid);
 
         bool uploadSucceeded = false;
         QString fetchedContent;

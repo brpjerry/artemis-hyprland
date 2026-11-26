@@ -146,6 +146,7 @@ private:
         NvAddress address;
         uint16_t httpsPort = 0;
         QSslCertificate serverCert;
+        bool useTrueUid = true; // NvHTTP sends the real client UID to non-GFE hosts
     };
 
     struct HttpJob
@@ -230,6 +231,10 @@ private:
     bool m_localUnconfirmed = false; // An upload failed: the local copy is newer than the host's
     QByteArray m_textSetThroughSdl; // UTF-8 text this session last put on the local clipboard
     int m_coveredClipboardUpdates = 0; // Queued updates covered by the focus-gain read
+    // What the host's Apollo permissions allow (SDL thread). Other hosts, and
+    // Apollo clients without these permissions, get no clipboard requests.
+    bool m_hostAcceptsUpload = false;
+    bool m_hostServesFetch = false;
     bool m_uploadInFlight;
     QString m_pendingUploadText; // Newest local copy made while an upload was in flight
     bool m_pendingUploadForced;

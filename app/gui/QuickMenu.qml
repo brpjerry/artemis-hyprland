@@ -81,7 +81,7 @@ Rectangle {
                 }
 
                 onClicked: {
-                    executeAction(model.action)
+                    executeAction(model.action, index)
                 }
 
                 contentItem: RowLayout {
@@ -224,7 +224,7 @@ Rectangle {
             text: qsTr("Quit")
             icon: "❌"
             action: "quit"
-            description: qsTr("Quit streaming session")
+            description: qsTr("Quit the app on the host and close Artemis")
         }
         ListElement {
             text: qsTr("Server Commands")
@@ -250,24 +250,6 @@ Rectangle {
             action: "toggle_stats"
             description: qsTr("Show/hide performance statistics")
         }
-        ListElement {
-            text: qsTr("Toggle Mouse Capture")
-            icon: "🖱"
-            action: "toggle_mouse"
-            description: qsTr("Toggle mouse capture mode")
-        }
-        ListElement {
-            text: qsTr("Toggle Keyboard Capture")
-            icon: "⌨"
-            action: "toggle_keyboard"
-            description: qsTr("Toggle keyboard capture mode")
-        }
-        ListElement {
-            text: qsTr("Toggle Fullscreen")
-            icon: "🖥"
-            action: "toggle_fullscreen"
-            description: qsTr("Toggle fullscreen mode")
-        }
     }
     
     function closeMenuDelayed() {
@@ -286,13 +268,25 @@ Rectangle {
     function executeCurrentItem() {
         var currentItem = menuListView.model.get(menuListView.currentIndex)
         if (currentItem) {
-            executeAction(currentItem.action)
+            executeAction(currentItem.action, menuListView.currentIndex)
         }
     }
     
-    function executeAction(action) {
+    function executeAction(action, row) {
         console.log("Executing action:", action)
-        
+
+        // Dispatch by the menu the entry came from: host command names are
+        // host-defined and may match a local action's name (e.g. "quit").
+        // Server commands go by row, which is the host's command index, since
+        // two commands can share a name.
+        if (currentMenu === "server_commands") {
+            if (quickMenuManager.serverCommandManager) {
+                quickMenuManager.serverCommandManager.executeCommandAt(row);
+            }
+            closeMenuDelayed();
+            return;
+        }
+
         // Handle navigation actions
         if (action === "server_commands") {
             if (quickMenuManager.serverCommandManager && quickMenuManager.serverCommandManager.hasPermission) {
@@ -302,16 +296,6 @@ Rectangle {
                 closeMenuDelayed();
             }
             return;
-        } else { // It might be a server command
-            for (var i = 0; i < serverCommandsModel.count; i++) {
-                if (serverCommandsModel.get(i).action === action) {
-                    if (quickMenuManager.serverCommandManager) {
-                        quickMenuManager.serverCommandManager.executeCommand(action);
-                        closeMenuDelayed();
-                    }
-                    return;
-                }
-            }
         }
         
         // Show action feedback

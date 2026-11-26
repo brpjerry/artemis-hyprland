@@ -29,20 +29,17 @@ win32 {
     INCLUDEPATH += $$PWD/../libs/windows/include
     DEFINES += HAS_QOS_FLOWID=1 HAS_PQOS_FLOWID=1
 }
-macx {
+macx:!disable-prebuilts {
     INCLUDEPATH += $$PWD/../libs/mac/include
 }
-unix:!macx {
+unix:if(!macx|disable-prebuilts) {
     CONFIG += link_pkgconfig
     PKGCONFIG += openssl
-    DEFINES += HAVE_CLOCK_GETTIME=1
 }
 
 COMMON_C_DIR = $$PWD/moonlight-common-c
 ENET_DIR = $$COMMON_C_DIR/enet
-RS_DIR = $$COMMON_C_DIR/reedsolomon
 SOURCES += \
-    $$RS_DIR/rs.c \
     $$ENET_DIR/callbacks.c \
     $$ENET_DIR/compress.c \
     $$ENET_DIR/host.c \
@@ -52,6 +49,9 @@ SOURCES += \
     $$ENET_DIR/protocol.c \
     $$ENET_DIR/unix.c \
     $$ENET_DIR/win32.c \
+    $$COMMON_C_DIR/nanors/deps/obl/oblas_common.c \
+    $$COMMON_C_DIR/nanors/deps/obl/oblas_lite.c \
+    $$COMMON_C_DIR/nanors/rs.c \
     $$COMMON_C_DIR/src/AudioStream.c \
     $$COMMON_C_DIR/src/ByteBuffer.c \
     $$COMMON_C_DIR/src/Connection.c \
@@ -75,9 +75,11 @@ SOURCES += \
 HEADERS += \
     $$COMMON_C_DIR/src/Limelight.h
 INCLUDEPATH += \
-    $$RS_DIR \
     $$ENET_DIR/include \
-    $$COMMON_C_DIR/src
+    $$COMMON_C_DIR/src \
+    $$COMMON_C_DIR/nanors \
+    $$COMMON_C_DIR/nanors/deps \
+    $$COMMON_C_DIR/nanors/deps/obl
 DEFINES += HAS_SOCKLEN_T
 
 CONFIG(debug, debug|release) {
@@ -85,9 +87,9 @@ CONFIG(debug, debug|release) {
     DEFINES += LC_DEBUG
 }
 
-# Older GCC versions defaulted to GNU89
-*-g++ {
-    QMAKE_CFLAGS += -std=gnu99
+# Enable support for C11 atomics on MSVC
+*-msvc {
+    QMAKE_CFLAGS += -std:c11 -experimental:c11atomics
 }
 
 # Disable unused parameter warnings on GCC and Clang

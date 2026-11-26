@@ -36,13 +36,11 @@ work=$(mktemp -d /home/builder/artemis.XXXXXXXX)
 cp -a "$src/." "$work/"
 chown -R builder: "$work"
 
-# The Linux build needs these submodules. The large "libs" submodule only holds
-# Windows and macOS prebuilts, so it's skipped.
-as_builder git -C "$work" submodule update --init --recursive --depth 1 -- \
-    moonlight-common-c/moonlight-common-c \
-    qmdnsengine/qmdnsengine \
-    h264bitstream/h264bitstream \
-    app/SDL_GameControllerDB
+# moonlight-common-c, qmdnsengine and SDL_GameControllerDB; all are needed.
+# Sync first: a checkout initialized before a submodule URL change in
+# .gitmodules (e.g. moonlight-common-c's fork) keeps the old remote otherwise.
+as_builder git -C "$work" submodule sync --recursive
+as_builder git -C "$work" submodule update --init --recursive --depth 1
 
 cd "$work/packaging/arch"
 
