@@ -85,9 +85,6 @@ private slots:
     void onCommandExecutionFinished();
 
 private:
-    // Permission checking (matches Android ComputerDetails.Operations)
-    bool checkServerCommandPermission();
-    
     void sendCommandExecution(const QString &commandId);
     
     // Streaming session state checking

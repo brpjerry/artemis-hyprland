@@ -1,6 +1,7 @@
 #include "clipboardmanager.h"
 #include "nvcomputer.h"
 #include "nvhttp.h"
+#include "serverpermissions.h"
 #include "settings/artemissettings.h"
 #include "SDL_compat.h"
 
@@ -174,17 +175,14 @@ void ClipboardManager::setConnection(NvComputer *computer)
         takeOverQtClipboard(textFromQt);
     }
 
-    // Apollo's PERM bits (src/crypto.h): clipboard_set = 1 << 16,
-    // clipboard_read = 1 << 17. Only Apollo reports a Permission mask in
-    // serverinfo, so Sunshine and GFE hosts get no clipboard requests at all.
-    constexpr quint32 kApolloPermClipboardSet = 1u << 16;
-    constexpr quint32 kApolloPermClipboardRead = 1u << 17;
+    // Only Apollo reports a Permission mask in serverinfo, so Sunshine and GFE
+    // hosts get no clipboard requests at all
     m_hostAcceptsUpload = false;
     m_hostServesFetch = false;
     if (computer) {
         QReadLocker lock(&computer->lock);
-        m_hostAcceptsUpload = (computer->serverPermissions & kApolloPermClipboardSet) != 0;
-        m_hostServesFetch = (computer->serverPermissions & kApolloPermClipboardRead) != 0;
+        m_hostAcceptsUpload = (computer->serverPermissions & ServerPermissions::CLIPBOARD_SET) != 0;
+        m_hostServesFetch = (computer->serverPermissions & ServerPermissions::CLIPBOARD_READ) != 0;
         qDebug() << "ClipboardManager: Connected to" << computer->name
                  << "- upload:" << m_hostAcceptsUpload << "fetch:" << m_hostServesFetch;
     }
