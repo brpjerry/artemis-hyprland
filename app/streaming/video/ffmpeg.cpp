@@ -61,6 +61,13 @@ extern "C" {
 
 #define FAILED_DECODES_RESET_THRESHOLD 20
 
+// Builds where tryInitializeRenderer() first tries an indirect EGL, DRM, or
+// Vulkan frontend for the backend renderer. Only that attempt consults the
+// preferred renderer backend (see isRendererBackendSupported()).
+#if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN) && (defined(HAVE_EGL) || defined(HAVE_DRM) || defined(HAVE_LIBPLACEBO_VULKAN))
+#define HAVE_ALTERNATE_FRONTEND_PASS
+#endif
+
 bool FFmpegVideoDecoder::isHardwareAccelerated()
 {
     return m_HwDecodeCfg != nullptr ||
@@ -353,6 +360,28 @@ bool FFmpegVideoDecoder::initializeRendererInternal(IFFmpegRenderer* renderer, P
     }
 
     return true;
+}
+
+bool FFmpegVideoDecoder::isRendererBackendSupported(int backend)
+{
+    // Keep these conditions in sync with the preference branches in
+    // createFrontendRenderer(), which only run in the alternate frontend pass
+    switch (backend) {
+    case StreamingPreferences::RB_AUTO:
+        return true;
+#ifdef HAVE_ALTERNATE_FRONTEND_PASS
+#ifdef HAVE_LIBPLACEBO_VULKAN
+    case StreamingPreferences::RB_VULKAN:
+        return true;
+#endif
+#ifdef HAVE_EGL
+    case StreamingPreferences::RB_OPENGL:
+        return true;
+#endif
+#endif
+    default:
+        return false;
+    }
 }
 
 bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool useAlternateFrontend)
@@ -1263,7 +1292,7 @@ bool FFmpegVideoDecoder::tryInitializeRenderer(const AVCodec* decoder,
     // i == 0 - Indirect via EGL, DRM, or Vulkan frontend with zero-copy buffer passing
     // i == 1 - Direct rendering or indirect via SDL or DRM read-back
     bool backendInitFailure = false;
-#if defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN) && (defined(HAVE_EGL) || defined(HAVE_DRM) || defined(HAVE_LIBPLACEBO_VULKAN))
+#ifdef HAVE_ALTERNATE_FRONTEND_PASS
     for (int i = 0; i < 2 && !backendInitFailure; i++) {
 #else
     for (int i = 1; i < 2 && !backendInitFailure; i++) {

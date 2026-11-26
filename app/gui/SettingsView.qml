@@ -463,6 +463,29 @@ Flickable {
                             lastIndexValue = currentIndex
                         }
 
+                        // The saved custom refresh rate in Hz if it's in effect
+                        // (it overrides the FPS preference), or 0 if it isn't
+                        function savedCustomRefreshRate() {
+                            const rate = StreamingPreferences.customRefreshRate
+                            return StreamingPreferences.enableFractionalRefreshRate && rate > 0 ? rate : 0
+                        }
+
+                        // Point the custom entry at the given frame rate and select it.
+                        // This only changes the list; updateBitrateForSelection() applies it.
+                        function selectCustomEntry(fps, description) {
+                            for (let i = 0; i < fpsListModel.count; i++) {
+                                if (fpsListModel.get(i).is_custom) {
+                                    fpsListModel.setProperty(i, "video_fps", "" + fps)
+                                    fpsListModel.setProperty(i, "text", description)
+                                    currentIndex = i
+                                    return
+                                }
+                            }
+
+                            fpsListModel.append({ "text": description, "video_fps": "" + fps, "is_custom": true })
+                            currentIndex = fpsListModel.count - 1
+                        }
+
                         NavigableDialog {
                             property bool isRefreshRateMode: false
                             
@@ -483,14 +506,10 @@ Flickable {
                                 // Force keyboard focus on the textbox so keyboard navigation works
                                 fpsField.forceActiveFocus()
 
-                                // Check if we have a saved custom refresh rate value
-                                if (StreamingPreferences.enableFractionalRefreshRate && StreamingPreferences.customRefreshRate > 0) {
-                                    fpsField.text = StreamingPreferences.customRefreshRate.toString()
-                                    customFpsDialog.isRefreshRateMode = true
-                                } else {
-                                    fpsField.text = ""
-                                    customFpsDialog.isRefreshRateMode = false
-                                }
+                                // Start from the saved custom refresh rate, if it's in effect
+                                const savedRate = fpsComboBox.savedCustomRefreshRate()
+                                fpsField.text = savedRate > 0 ? savedRate.toString() : ""
+                                customFpsDialog.isRefreshRateMode = savedRate > 0
 
                                 // standardButton() was added in Qt 5.10, so we must check for it first
                                 if (customFpsDialog.standardButton) {
@@ -513,56 +532,35 @@ Flickable {
                                     return
                                 }
 
-                                // Check if user entered a value
-                                var enteredValue = fpsField.text ? fpsField.text : fpsField.placeholderText
-                                var hasCustomValue = fpsField.text && fpsField.text.trim() !== ""
-                                
-                                if (hasCustomValue) {
+                                // The preferences change only here, once the dialog is accepted
+                                if (fpsField.text && fpsField.text.trim() !== "") {
                                     // User entered a custom refresh rate - enable fractional refresh rate mode
-                                    var refreshRate = parseFloat(enteredValue)
-                                    if (!isNaN(refreshRate)) {
-                                        StreamingPreferences.customRefreshRate = refreshRate
-                                        StreamingPreferences.enableFractionalRefreshRate = true
-                                        StreamingPreferences.fps = Math.round(refreshRate)
-                                        
-                                        // Update the FPS dropdown to reflect the new value
-                                        for (var i = 0; i < fpsListModel.count; i++) {
-                                            if (fpsListModel.get(i).is_custom) {
-                                                fpsListModel.setProperty(i, "video_fps", Math.round(refreshRate).toString())
-                                                fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
-                                                fpsComboBox.currentIndex = i
-                                                fpsComboBox.updateBitrateForSelection()
-                                                fpsComboBox.recalculateWidth()
-                                                break
-                                            }
-                                        }
+                                    const refreshRate = parseFloat(fpsField.text)
+                                    if (isNaN(refreshRate)) {
+                                        reject()
+                                        return
                                     }
+
+                                    StreamingPreferences.customRefreshRate = refreshRate
+                                    StreamingPreferences.enableFractionalRefreshRate = true
+                                    fpsComboBox.selectCustomEntry(Math.round(refreshRate),
+                                                                  qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
                                 } else {
                                     // User didn't enter a value - disable fractional refresh rate mode
-                                    StreamingPreferences.enableFractionalRefreshRate = false
-                                    
-                                    // Use default/standard FPS value 
-                                    var fps = parseInt(fpsField.placeholderText)
+                                    // and use the placeholder as a whole frame rate
+                                    let fps = parseInt(fpsField.placeholderText)
                                     if (isNaN(fps)) fps = 60 // fallback to 60 FPS
-                                    
-                                    StreamingPreferences.fps = fps
 
-                                    // Find and update the custom entry
-                                    for (var i = 0; i < fpsListModel.count; i++) {
-                                        if (fpsListModel.get(i).is_custom) {
-                                            fpsListModel.setProperty(i, "video_fps", fps.toString())
-                                            fpsListModel.setProperty(i, "text", qsTr("Custom (%1 FPS)").arg(fps))
-
-                                            // Now update the bitrate using the custom resolution
-                                            fpsComboBox.currentIndex = i
-                                            fpsComboBox.updateBitrateForSelection()
-
-                                            // Update the combobox width too
-                                            fpsComboBox.recalculateWidth()
-                                            break
-                                        }
-                                    }
+                                    StreamingPreferences.enableFractionalRefreshRate = false
+                                    fpsComboBox.selectCustomEntry(fps, qsTr("Custom (%1 FPS)").arg(fps))
                                 }
+
+                                // Store the (rounded) frame rate from the custom entry and update
+                                // the bitrate to match, as selecting a preset does
+                                fpsComboBox.updateBitrateForSelection()
+
+                                // Update the combobox width too
+                                fpsComboBox.recalculateWidth()
                             }
 
                             ColumnLayout {
@@ -598,11 +596,12 @@ Flickable {
                                             }
 
                                         onTextChanged: {
-                                            // Automatically enable fractional refresh rate if there's a value
+                                            // A value means a custom refresh rate. This only updates the
+                                            // dialog; onAccepted applies it, so cancelling, or the clear()
+                                            // in onClosed, leaves the preferences alone.
                                             var hasValue = fpsField.text && fpsField.text.trim() !== ""
                                             customFpsDialog.isRefreshRateMode = hasValue
-                                            StreamingPreferences.enableFractionalRefreshRate = hasValue
-                                            
+
                                             // standardButton() was added in Qt 5.10, so we must check for it first
                                             if (customFpsDialog.standardButton) {
                                                 customFpsDialog.standardButton(Dialog.Ok).enabled = customFpsDialog.isInputValid()
@@ -690,6 +689,13 @@ Flickable {
                                 addRefreshRateOrdered(model, "", qsTr("Custom"), true)
                             }
 
+                            // A saved custom refresh rate overrides the FPS preference when
+                            // streaming, so show it instead of the entry matching its rounded FPS
+                            const customRate = savedCustomRefreshRate()
+                            if (customRate > 0) {
+                                selectCustomEntry(Math.round(customRate), qsTr("Custom (%1 Hz)").arg(customRate.toFixed(2)))
+                            }
+
                             recalculateWidth()
 
                             lastIndexValue = currentIndex
@@ -725,6 +731,8 @@ Flickable {
                                 customFpsDialog.open()
                             }
                             else {
+                                // A preset frame rate replaces any custom refresh rate
+                                StreamingPreferences.enableFractionalRefreshRate = false
                                 updateBitrateForSelection()
                             }
                         }
@@ -1825,22 +1833,33 @@ Flickable {
                     font.pointSize: 12
                     wrapMode: Text.Wrap
                     topPadding: 12
-                    // macOS uses the "Renderer" selector below instead
-                    visible: !SystemProperties.isDarwin
+                    visible: rendererBackendComboBox.visible
                 }
 
                 AutoResizingComboBox {
                     function createModel() {
                         var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', parent, '')
 
-                        model.append({ text: qsTr("Automatic"), val: StreamingPreferences.RB_AUTO })
-                        model.append({ text: qsTr("Vulkan"), val: StreamingPreferences.RB_VULKAN })
-                        model.append({ text: qsTr("OpenGL"), val: StreamingPreferences.RB_OPENGL })
+                        // Only list the renderers this build can honor
+                        const choices = [
+                            { text: qsTr("Automatic"), val: StreamingPreferences.RB_AUTO },
+                            { text: qsTr("Vulkan"), val: StreamingPreferences.RB_VULKAN },
+                            { text: qsTr("OpenGL"), val: StreamingPreferences.RB_OPENGL }
+                        ]
+                        for (const choice of choices) {
+                            if (SystemProperties.supportsRendererBackend(choice.val)) {
+                                model.append(choice)
+                            }
+                        }
                         return model
                     }
 
                     function reinitialize() {
                         model = createModel()
+
+                        // A saved renderer this build doesn't list shows as Automatic, and
+                        // it stays saved: the settings may be shared with another build
+                        // that can use it. Only a choice the user makes here replaces it.
                         currentIndex = 0
                         var saved = StreamingPreferences.rendererBackend
                         for (var i = 0; i < model.count; i++) {
@@ -1849,7 +1868,7 @@ Flickable {
                                 break
                             }
                         }
-                        activated(currentIndex)
+                        recalculateWidth()
                     }
 
                     Component.onCompleted: {
@@ -1858,7 +1877,9 @@ Flickable {
                     }
 
                     id: rendererBackendComboBox
-                    visible: !SystemProperties.isDarwin
+                    // Hide the selector when Automatic is the only choice, as on
+                    // macOS (which uses the "Renderer" selector below instead)
+                    visible: count > 1
                     textRole: "text"
                     onActivated: {
                         StreamingPreferences.rendererBackend = model.get(currentIndex).val
