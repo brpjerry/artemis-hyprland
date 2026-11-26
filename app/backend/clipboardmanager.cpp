@@ -360,7 +360,7 @@ bool ClipboardManager::getClipboard()
     return true;
 }
 
-void ClipboardManager::processPendingWork()
+void ClipboardManager::processPendingWork(bool uploadCurrentOffer)
 {
     // Clear before taking the work, so anything stored after this posts a new
     // wakeup
@@ -374,6 +374,14 @@ void ClipboardManager::processPendingWork()
         }
         work = m_pending;
         m_pending = PendingWork();
+    }
+
+    // Read the current local offer before a completed fetch can replace it.
+    // A pending manual upload is the same read, so it's folded in (with its
+    // force flag) instead of POSTing the same text twice.
+    if (uploadCurrentOffer) {
+        uploadLocalClipboard(work.manualUpload && work.manualUploadForced);
+        work.manualUpload = false;
     }
 
     // Upload results first: they record what the host confirmed, which a
@@ -396,14 +404,14 @@ void ClipboardManager::processPendingWork()
 
 void ClipboardManager::onStreamClipboardUpdated()
 {
-    // Read the new local offer before applying stored results: a fetch that
-    // completed meanwhile is then marked superseded by this upload and
-    // dropped, instead of overwriting the newer local copy.
-    if (m_enabled) {
-        uploadLocalClipboard(false);
-    }
+    processPendingWork(m_enabled);
+}
 
-    processPendingWork();
+void ClipboardManager::onStreamFocusGained()
+{
+    // A copy made while the stream was in the background is offered on focus
+    // gain, possibly after a fetch completed: read it first, as above
+    processPendingWork(m_enabled);
 }
 
 void ClipboardManager::onStreamFocusLost()
