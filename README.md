@@ -178,10 +178,13 @@ chmod +x scripts/setup-dev.sh
 **Windows:**
 - Visual Studio 2022 with MSVC
 - 7-Zip (for packaging)
+- Run `powershell .\setup-deps.ps1` from the repository root before configuring a build. It downloads the prebuilt dependencies into `libs\windows`.
 
 **macOS:**
 - Xcode 14+
-- Homebrew: `brew install qt6 ffmpeg opus sdl2 sdl2_ttf create-dmg`
+- Qt 6, for example `brew install qt6`
+- Run `python3 setup-deps.py` from the repository root before configuring a build. It downloads the prebuilt universal dependencies into `libs/mac`.
+- [create-dmg](https://github.com/sindresorhus/create-dmg) from npm (`npm install --global create-dmg`), only for `scripts/generate-dmg.sh`. Homebrew's `create-dmg` formula is a different tool.
 
 **Linux:**
 ```bash
@@ -205,8 +208,12 @@ sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \
 # Initialize submodules
 git submodule update --init --recursive
 
+# Windows and macOS only: fetch the prebuilt dependencies into libs/
+powershell .\setup-deps.ps1  # Windows
+python3 setup-deps.py  # macOS
+
 # Configure and build
-qmake6 moonlight-qt.pro CONFIG+=release
+qmake6 artemis.pro CONFIG+=release
 make -j$(nproc)  # Linux
 make -j$(sysctl -n hw.ncpu)  # macOS
 nmake  # Windows
