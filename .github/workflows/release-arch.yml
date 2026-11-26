@@ -1,0 +1,119 @@
+name: Arch Linux Release
+
+# Pushing a tag like v0.6.8 builds the pacman package with that version and
+# publishes it to the tag's GitHub release, together with SHA256SUMS and a
+# pacman repository database, so the release can be used as a pacman Server.
+# Run it by hand to rebuild an existing tag (e.g. with a higher pkgrel).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v0.6.8
+        type: string
+        required: true
+      pkgrel:
+        description: Package release number
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-arch-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      pkgver: ${{ steps.version.outputs.pkgver }}
+    steps:
+      - name: Derive package version
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          pkgver=${TAG#v}
+          # pacman versions can't contain '-', ':' or whitespace
+          if [[ $TAG != v* || ! $pkgver =~ ^[0-9][A-Za-z0-9._+]*$ ]]; then
+            echo "::error::Tag '$TAG' must be v<version>, using only letters, digits, '.', '_' and '+' (e.g. v0.6.8)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: version
+    uses: ./.github/workflows/arch-package.yml
+    with:
+      ref: refs/tags/${{ needs.version.outputs.tag }}
+      pkgver: ${{ needs.version.outputs.pkgver }}
+      pkgrel: ${{ inputs.pkgrel || '1' }}
+
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    container: archlinux:base  # provides repo-add
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+      FULLVER: ${{ needs.build.outputs.pkgver }}
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed github-cli
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Create pacman repository database
+        working-directory: dist
+        run: |
+          repo-add artemis-hyprland.db.tar.gz ./*.pkg.tar.zst
+          # repo-add makes .db/.files symlinks; release assets must be real files
+          for f in artemis-hyprland.db artemis-hyprland.files; do
+            cp --remove-destination "$(readlink -f "$f")" "$f"
+          done
+          sha256sum -- * > SHA256SUMS
+          ls -l
+
+      - name: Write release notes
+        run: |
+          sha=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
+          cat > notes.md <<EOF
+          Arch Linux package for artemis-hyprland $FULLVER, built from \`$TAG\` (${sha:0:12}).
+
+          Install directly:
+
+              sudo pacman -U artemis-hyprland-$FULLVER-x86_64.pkg.tar.zst
+
+          Or use the releases as a pacman repository (packages are unsigned):
+
+              [artemis-hyprland]
+              SigLevel = Optional TrustAll
+              Server = https://github.com/$GH_REPO/releases/latest/download
+
+          Replace \`latest/download\` with \`download/$TAG\` to pin this release.
+          EOF
+
+      - name: Publish
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "artemis-hyprland $FULLVER" --notes-file notes.md
+          fi
