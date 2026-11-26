@@ -877,38 +877,64 @@ Flickable {
                     ToolTip.text: qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
                 }
 
-                CheckBox {
-                    id: vsyncCheck
+                Row {
+                    spacing: 5
                     width: parent.width
-                    hoverEnabled: true
-                    text: qsTr("V-Sync")
-                    font.pointSize:  12
-                    checked: StreamingPreferences.enableVsync
-                    onCheckedChanged: {
-                        StreamingPreferences.enableVsync = checked
+
+                    CheckBox {
+                        id: vsyncCheck
+                        hoverEnabled: true
+                        text: qsTr("V-Sync")
+                        font.pointSize:  12
+                        checked: StreamingPreferences.enableVsync
+                        onCheckedChanged: {
+                            StreamingPreferences.enableVsync = checked
+                        }
+
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 5000
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
                     }
 
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
+                    CheckBox {
+                        id: framePacingCheck
+                        hoverEnabled: true
+                        text: qsTr("Frame pacing")
+                        font.pointSize:  12
+                        enabled: StreamingPreferences.enableVsync
+                        checked: StreamingPreferences.enableVsync && StreamingPreferences.framePacing
+                        onCheckedChanged: {
+                            StreamingPreferences.framePacing = checked
+                        }
+                        ToolTip.delay: 1000
+                        ToolTip.timeout: 5000
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
+                    }
                 }
 
                 CheckBox {
-                    id: framePacingCheck
+                    id: enableHdr
                     width: parent.width
-                    hoverEnabled: true
-                    text: qsTr("Frame pacing")
-                    font.pointSize:  12
-                    enabled: StreamingPreferences.enableVsync
-                    checked: StreamingPreferences.enableVsync && StreamingPreferences.framePacing
+                    text: qsTr("Enable HDR")
+                    font.pointSize: 12
+
+                    enabled: SystemProperties.supportsHdr
+                    checked: enabled && StreamingPreferences.enableHdr
                     onCheckedChanged: {
-                        StreamingPreferences.framePacing = checked
+                        StreamingPreferences.enableHdr = checked
                     }
+
+                    // Updating StreamingPreferences.videoCodecConfig is handled above
+
                     ToolTip.delay: 1000
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
+                    ToolTip.text: enabled ?
+                                      qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
+                                    :
+                                      qsTr("HDR streaming is not supported on this PC.")
                 }
             }
         }
@@ -1257,10 +1283,10 @@ Flickable {
                             text: "Português" // Portuguese
                             val: StreamingPreferences.LANG_PT
                         }
-                        /* ListElement {
+                        ListElement {
                             text: "Português do Brasil" // Brazilian Portuguese
                             val: StreamingPreferences.LANG_PT_BR
-                        } */
+                        }
                         ListElement {
                             text: "Ελληνικά" // Greek
                             val: StreamingPreferences.LANG_EL
@@ -1780,7 +1806,7 @@ Flickable {
                             val: StreamingPreferences.VCC_FORCE_HEVC
                         }
                         ListElement {
-                            text: qsTr("AV1 (Experimental)")
+                            text: qsTr("AV1")
                             val: StreamingPreferences.VCC_FORCE_AV1
                         }
                     }
@@ -1792,77 +1818,66 @@ Flickable {
                     }
                 }
 
-                // Preferred renderer backend
                 Label {
                     width: parent.width
-                    text: qsTr("Preferred renderer")
+                    id: rendererTitle
+                    text: qsTr("Renderer")
                     font.pointSize: 12
                     wrapMode: Text.Wrap
-                    topPadding: 12
+                    visible: SystemProperties.isDarwin
                 }
 
                 AutoResizingComboBox {
-                    function createModel() {
-                        var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', parent, '')
+                    // ignore setting the index at first, and actually set it when the component is loaded
+                    Component.onCompleted: {
+                        var saved_rs = StreamingPreferences.rendererSelection
 
-                        model.append({ text: qsTr("Auto (Vulkan, fallback to OpenGL)"), val: StreamingPreferences.RB_AUTO })
-                        model.append({ text: qsTr("Vulkan"), val: StreamingPreferences.RB_VULKAN })
-                        model.append({ text: qsTr("OpenGL"), val: StreamingPreferences.RB_OPENGL })
-                        return model
-                    }
-
-                    function reinitialize() {
-                        model = createModel()
+                        // Default to Automatic
                         currentIndex = 0
-                        var saved = StreamingPreferences.rendererBackend
-                        for (var i = 0; i < model.count; i++) {
-                            if (model.get(i).val === saved) {
+
+                        for(var i = 0; i < rendererListModel.count; i++) {
+                            var el_rs = rendererListModel.get(i).val;
+                            if (saved_rs === el_rs) {
                                 currentIndex = i
                                 break
                             }
                         }
+
                         activated(currentIndex)
                     }
 
-                    Component.onCompleted: {
-                        reinitialize()
-                        languageChanged.connect(reinitialize)
-                    }
-
-                    id: rendererBackendComboBox
+                    id: rendererComboBox
+                    visible: SystemProperties.isDarwin
                     textRole: "text"
-                    onActivated: {
-                        StreamingPreferences.rendererBackend = model.get(currentIndex).val
+                    model: ListModel {
+                        id: rendererListModel
+                        ListElement {
+                            text: qsTr("Automatic (Recommended)")
+                            val: StreamingPreferences.RS_AUTO
+                        }
+                        ListElement {
+                            text: "Vulkan"
+                            val: StreamingPreferences.RS_VULKAN
+                        }
+                        ListElement {
+                            text: "Metal"
+                            val: StreamingPreferences.RS_METAL
+                        }
+                        ListElement {
+                            text: "AVSampleBufferDisplayLayer"
+                            val: StreamingPreferences.RS_AVSBDL
+                        }
                     }
-                }
-
-                CheckBox {
-                    id: enableHdr
-                    width: parent.width
-                    text: qsTr("Enable HDR (Experimental)")
-                    font.pointSize: 12
-
-                    enabled: SystemProperties.supportsHdr
-                    checked: enabled && StreamingPreferences.enableHdr
-                    onCheckedChanged: {
-                        StreamingPreferences.enableHdr = checked
+                    // ::onActivated must be used, as it only listens for when the index is changed by a human
+                    onActivated : {
+                        StreamingPreferences.rendererSelection = rendererListModel.get(currentIndex).val
                     }
-
-                    // Updating StreamingPreferences.videoCodecConfig is handled above
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: enabled ?
-                                      qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
-                                    :
-                                      qsTr("HDR streaming is not supported on this PC.")
                 }
 
                 CheckBox {
                     id: enableYUV444
                     width: parent.width
-                    text: qsTr("Enable YUV 4:4:4 (Experimental)")
+                    text: qsTr("Enable YUV 4:4:4")
                     font.pointSize: 12
 
                     checked: StreamingPreferences.enableYUV444

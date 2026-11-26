@@ -34,12 +34,12 @@ Item {
 
         BusyIndicator {
             id: stageSpinner
+            running: visible
         }
 
         Label {
             id: stageLabel
             height: stageSpinner.height
-            text: stageText
             font.pointSize: 20
             verticalAlignment: Text.AlignVCenter
 

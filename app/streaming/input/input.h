@@ -23,11 +23,11 @@ struct GamepadState {
     bool emulatedClickpadButtonDown;
 
 #if SDL_VERSION_ATLEAST(2, 0, 14)
-    uint8_t gyroReportPeriodMs;
+    uint16_t gyroReportPeriodMs;
     float lastGyroEventData[SDL_arraysize(SDL_ControllerSensorEvent::data)];
     uint32_t lastGyroEventTime;
 
-    uint8_t accelReportPeriodMs;
+    uint16_t accelReportPeriodMs;
     float lastAccelEventData[SDL_arraysize(SDL_ControllerSensorEvent::data)];
     uint32_t lastAccelEventTime;
 #endif
@@ -138,6 +138,8 @@ public:
 
     void notifyFocusLost();
 
+    void notifyFocusGained();
+
     bool isCaptureActive();
 
     bool isSystemKeyCaptureActive();
@@ -165,7 +167,7 @@ private:
         KeyComboPasteText,
         KeyComboTogglePointerRegionLock,
         KeyComboQuitAndExit,
-        KeyComboToggleQuickMenu,
+        KeyComboToggleKeyboardGrab,
         KeyComboMax
     };
 
@@ -208,6 +210,7 @@ private:
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
 
+    bool m_NeedsManualCaptureOnLeave;
     bool m_MouseWasInVideoRegion;
     bool m_PendingMouseButtonsAllUpOnVideoRegionLeave;
     bool m_PointerRegionLockActive;
@@ -215,8 +218,9 @@ private:
 
     int m_GamepadMask;
     GamepadState m_GamepadState[MAX_GAMEPADS];
-    QSet<short> m_KeysDown;
-    bool m_FakeCaptureActive;
+    QSet<uint32_t> m_KeysDown;
+    bool m_FakeMouseCaptureActive;
+    bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;
     QString m_OldIgnoreDevicesExcept;
     QStringList m_IgnoreDeviceGuids;

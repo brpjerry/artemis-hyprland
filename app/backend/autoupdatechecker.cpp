@@ -59,7 +59,7 @@ void AutoUpdateChecker::start()
 void AutoUpdateChecker::parseStringToVersionQuad(QString& string, QVector<int>& version)
 {
     QStringList list = string.split('.');
-    for (const QString& component : list) {
+    for (const QString& component : std::as_const(list)) {
         version.append(component.toInt());
     }
 }
@@ -141,8 +141,16 @@ void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply* reply)
             return;
         }
 
-        // Get the most recent release (first in the array)
-        QJsonObject releaseObj = releasesArray[0].toObject();
+        for (const auto& updateEntry : std::as_const(array)) {
+            if (updateEntry.isObject()) {
+                QJsonObject updateObj = updateEntry.toObject();
+                if (!updateObj.contains("platform") ||
+                        !updateObj.contains("arch") ||
+                        !updateObj.contains("version") ||
+                        !updateObj.contains("browser_url")) {
+                    qWarning() << "Update manifest entry missing vital field";
+                    continue;
+                }
 
         // Extract version from tag_name (remove 'v' prefix if present)
         QString tagName = releaseObj["tag_name"].toString();

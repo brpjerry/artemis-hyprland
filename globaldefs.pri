@@ -9,10 +9,31 @@ CONFIG(release, debug|release) {
     DEFINES += NDEBUG
 }
 
+# Enable CFG, EHCont, PAC, and CET
+*-msvc {
+    QMAKE_CFLAGS += -guard:cf -guard:ehcont
+    QMAKE_CXXFLAGS += -guard:cf -guard:ehcont
+    QMAKE_LFLAGS += -guard:cf -guard:ehcont
+
+    contains(QT_ARCH, x86_64) {
+        QMAKE_LFLAGS += -cetcompat
+    }
+
+    contains(QT_ARCH, arm64) {
+        QMAKE_CFLAGS += -guard:signret
+        QMAKE_CXXFLAGS += -guard:signret
+    }
+}
+
 # Enable ASan for Linux or macOS
 #CONFIG += sanitizer sanitize_address
 
 # Enable ASan for Windows
 #QMAKE_CFLAGS += -fsanitize=address
 #QMAKE_CXXFLAGS += -fsanitize=address
-#QMAKE_LFLAGS += -incremental:no -wholearchive:clang_rt.asan_dynamic-x86_64.lib -wholearchive:clang_rt.asan_dynamic_runtime_thunk-x86_64.lib
+#QMAKE_LFLAGS += -incremental:no
+
+# Propagate environment variable flags
+QMAKE_CFLAGS   += $$(CFLAGS)
+QMAKE_CXXFLAGS += $$(CXXFLAGS)
+QMAKE_LFLAGS   += $$(LDFLAGS)

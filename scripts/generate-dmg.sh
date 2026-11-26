@@ -17,9 +17,8 @@ SOURCE_ROOT=$PWD
 BUILD_FOLDER=$BUILD_ROOT/build-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
 
-# Use override version if provided, otherwise read from version.txt
-if [ "$OVERRIDE_VERSION" != "" ]; then
-  VERSION="$OVERRIDE_VERSION"
+if [ -n "$CI_VERSION" ]; then
+  VERSION=$CI_VERSION
 else
   VERSION=`cat $SOURCE_ROOT/app/version.txt`
 fi
@@ -33,12 +32,20 @@ fi
 
 [ "$SIGNING_IDENTITY" == "" ] || git diff-index --quiet HEAD -- || fail "Signed release builds must not have unstaged changes!"
 
+echo Updating dependencies
+python3 $SOURCE_ROOT/setup-deps.py
+
 echo Cleaning output directories
 rm -rf $BUILD_FOLDER
 rm -rf $INSTALLER_FOLDER
 mkdir $BUILD_ROOT
 mkdir $BUILD_FOLDER
 mkdir $INSTALLER_FOLDER
+
+# Enable LTO for official builds
+export CFLAGS=-flto=thin
+export CXXFLAGS=-flto=thin
+export LDFLAGS=-flto=thin
 
 echo Configuring the project
 pushd $BUILD_FOLDER
@@ -75,77 +82,23 @@ DMG_NAME="Artemis-$VERSION.dmg"
 
 # Create a properly formatted DMG with custom background and icons
 if [ "$SIGNING_IDENTITY" != "" ]; then
-  echo "Creating signed DMG with custom styling..."
-  create-dmg \
-    --volname "Artemis" \
-    --volicon "$SOURCE_ROOT/app/artemis.icns" \
-    --background "$SOURCE_ROOT/scripts/dmg-background.png" \
-    --window-pos 200 120 \
-    --window-size 660 400 \
-    --icon-size 100 \
-    --icon "Artemis.app" 180 170 \
-    --hide-extension "Artemis.app" \
-    --app-drop-link 480 170 \
-    --no-internet-enable \
-    --identity="$SIGNING_IDENTITY" \
-    "$INSTALLER_FOLDER/$DMG_NAME" \
-    "$BUILD_FOLDER/app/Artemis.app" || {
-      echo "create-dmg failed! Trying fallback method..."
-      # Fallback to basic DMG creation if fancy DMG fails
-      hdiutil create -volname "Artemis" -srcfolder "$BUILD_FOLDER/app/Artemis.app" -ov -format UDZO "$INSTALLER_FOLDER/$DMG_NAME"
-      if [ "$?" -ne 0 ]; then
-        fail "DMG creation failed even with fallback method!"
-      fi
-      # Sign the fallback DMG if we have signing identity
-      if [ "$SIGNING_IDENTITY" != "" ]; then
-        codesign --force --sign "$SIGNING_IDENTITY" "$INSTALLER_FOLDER/$DMG_NAME" || echo "Warning: DMG signing failed but DMG was created"
-      fi
-    }
+  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --identity="$SIGNING_IDENTITY" --no-version-in-filename || fail "create-dmg failed!"
 else
-  echo "Creating unsigned DMG with custom styling..."
-  create-dmg \
-    --volname "Artemis" \
-    --volicon "$SOURCE_ROOT/app/artemis.icns" \
-    --background "$SOURCE_ROOT/scripts/dmg-background.png" \
-    --window-pos 200 120 \
-    --window-size 660 400 \
-    --icon-size 100 \
-    --icon "Artemis.app" 180 170 \
-    --hide-extension "Artemis.app" \
-    --app-drop-link 480 170 \
-    --no-internet-enable \
-    "$INSTALLER_FOLDER/$DMG_NAME" \
-    "$BUILD_FOLDER/app/Artemis.app" || {
-      echo "create-dmg failed! Trying fallback method..."
-      # Fallback to basic DMG creation if fancy DMG fails
-      hdiutil create -volname "Artemis" -srcfolder "$BUILD_FOLDER/app/Artemis.app" -ov -format UDZO "$INSTALLER_FOLDER/$DMG_NAME"
-      if [ "$?" -ne 0 ]; then
-        fail "DMG creation failed even with fallback method!"
-      fi
-    }
+  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --no-version-in-filename
+  case $? in
+    0) ;;
+    2) ;;
+    *) fail "create-dmg failed!";;
+  esac
 fi
 
 if [ "$NOTARY_KEYCHAIN_PROFILE" != "" ]; then
   echo Uploading to App Notary service
-  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait "$INSTALLER_FOLDER/$DMG_NAME" || fail "Notary submission failed"
+  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary submission failed"
 
   echo Stapling notary ticket to DMG
-  xcrun stapler staple -v "$INSTALLER_FOLDER/$DMG_NAME" || fail "Notary ticket stapling failed!"
+  xcrun stapler staple -v $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary ticket stapling failed!"
 fi
 
-# Create build info file
-cat > $INSTALLER_FOLDER/build_info_macos.txt << EOF
-Artemis Desktop macOS Universal Development Build
-Version: $VERSION
-Architecture: Universal (x86_64 + arm64)
-Build Configuration: $BUILD_CONFIG
-Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-Installation Notes:
-- This is a universal binary that works on both Intel and Apple Silicon Macs
-- If macOS says the app is "damaged", run: xattr -cr Artemis.app
-- Or go to System Preferences > Security & Privacy and allow the app
-- This is a development build and may trigger Gatekeeper warnings
-EOF
-
+mv $INSTALLER_FOLDER/Moonlight.dmg $INSTALLER_FOLDER/Moonlight-$VERSION.dmg
 echo Build successful
