@@ -120,8 +120,9 @@ public:
 
     // SDL thread: called from the stream's SDL event loop. They process stored
     // work (HTTP results, manual requests). With sync enabled, a clipboard
-    // update and focus gain read the local offer first, so a fetch that
-    // completed meanwhile is superseded instead of overwriting a newer copy.
+    // update and focus gain read the local offer first (focus gain also
+    // consumes queued clipboard updates), so a fetch that completed meanwhile
+    // is superseded instead of overwriting a newer copy.
     void processPendingWork(bool uploadCurrentOffer = false); // SDL_CODE_CLIPBOARD_WAKE
     // Called on every SDL loop iteration: picks up work whose wakeup event
     // couldn't be posted (SDL's event queue was full). Cheap when there is none.
@@ -227,6 +228,7 @@ private:
 
     // SDL thread
     QByteArray m_lastSyncedHash; // Content both sides confirmed most recently
+    bool m_localUnconfirmed = false; // An upload failed: the local copy is newer than the host's
     QByteArray m_textSetThroughSdl; // UTF-8 text this session last put on the local clipboard
     bool m_uploadInFlight;
     QString m_pendingUploadText; // Newest local copy made while an upload was in flight
