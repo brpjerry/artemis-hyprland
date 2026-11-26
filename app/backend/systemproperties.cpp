@@ -24,9 +24,10 @@ public:
 private:
     void run() override
     {
-        bool hasHardwareAcceleration;
-        bool rendererAlwaysFullScreen;
-        bool supportsHdr;
+        // getDecoderInfo() leaves these unset if every probe fails
+        bool hasHardwareAcceleration = false;
+        bool rendererAlwaysFullScreen = false;
+        bool supportsHdr = false;
         QSize maximumResolution;
 
         Session::getDecoderInfo(m_Properties->testWindow, hasHardwareAcceleration, rendererAlwaysFullScreen, supportsHdr, maximumResolution);

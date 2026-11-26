@@ -660,6 +660,14 @@ void ComputerManager::pairHost(NvComputer* computer, QString pin)
     QThreadPool::globalInstance()->start(pairing);
 }
 
+// Network errors can quote the request URL, whose query carries the OTP hash
+// (otpauth) and salt. Keep them out of logs and error messages.
+static QString redactUrlQueries(QString text)
+{
+    static const QRegularExpression query(QStringLiteral("\\?[^\\s\"']*"));
+    return text.replace(query, QStringLiteral("?<redacted>"));
+}
+
 class PendingOTPPairingTask : public QObject, public QRunnable
 {
     Q_OBJECT
@@ -963,7 +971,7 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
             qDebug() << "PendingOTPPairingTask: Pairing handshake HTTP error:" << e.getStatusMessage();
             return false;
         } catch (const QtNetworkReplyException& e) {
-            qDebug() << "PendingOTPPairingTask: Pairing handshake network error:" << e.getErrorText();
+            qDebug() << "PendingOTPPairingTask: Pairing handshake network error:" << redactUrlQueries(e.getErrorText());
             return false;
         } catch (const std::exception& e) {
             qDebug() << "PendingOTPPairingTask: Pairing handshake error:" << e.what();
@@ -1113,7 +1121,7 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
             emit pairingCompleted(m_Computer, errorMsg);
         } catch (const QtNetworkReplyException& e) {
             QString errorMsg = QString("Apollo OTP pairing network error: %1")
-                                .arg(e.getErrorText());
+                                .arg(redactUrlQueries(e.getErrorText()));
             qDebug() << "PendingOTPPairingTask: Network error:" << errorMsg;
             emit pairingCompleted(m_Computer, errorMsg);
         } catch (const std::exception& e) {

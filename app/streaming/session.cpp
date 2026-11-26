@@ -1860,11 +1860,13 @@ bool Session::startConnectionAsync()
         !(m_StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_YUV444) &&
         m_StreamConfig.bitrate == StreamingPreferences::getDefaultBitrate(m_StreamConfig.width,
                                                                           m_StreamConfig.height,
-                                                                          m_StreamConfig.fps,
+                                                                          getActualFpsForDecoderTest(),
                                                                           true)) {
+        // getActualFpsForDecoderTest(): with fractional rates fps is in
+        // millihertz, while the default bitrate is computed for whole fps
         m_StreamConfig.bitrate = StreamingPreferences::getDefaultBitrate(m_StreamConfig.width,
                                                                          m_StreamConfig.height,
-                                                                         m_StreamConfig.fps,
+                                                                         getActualFpsForDecoderTest(),
                                                                          false);
     }
 
@@ -2527,6 +2529,11 @@ DispatchDeferredCleanup:
     // Stop clipboard sync while the window and SDL video are still alive, so
     // the clipboard can be handed over to Qt
     m_ClipboardManager->disconnect();
+
+    // The quick menu acts on this stream; don't leave it open once Qt resumes
+    if (m_QuickMenuManager) {
+        m_QuickMenuManager->setVisible(false);
+    }
 
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
