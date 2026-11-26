@@ -15,9 +15,9 @@ on:
         type: string
         required: true
       pkgrel:
-        description: Package release number
+        description: Package release number, higher than any already published for the tag
         type: string
-        default: '1'
+        required: true
 
 permissions:
   contents: read
@@ -40,9 +40,11 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           pkgver=${TAG#v}
-          # pacman versions can't contain '-', ':' or whitespace
-          if [[ $TAG != v* || ! $pkgver =~ ^[0-9][A-Za-z0-9._+]*$ ]]; then
-            echo "::error::Tag '$TAG' must be v<version>, using only letters, digits, '.', '_' and '+' (e.g. v0.6.8)"
+          # pacman versions can't contain '-', ':' or whitespace, and GitHub
+          # renames release assets with other special characters such as '+',
+          # which would break the file names the pacman database lists
+          if [[ $TAG != v* || ! $pkgver =~ ^[0-9][A-Za-z0-9._]*$ ]]; then
+            echo "::error::Tag '$TAG' must be v<version>, using only letters, digits, '.' and '_' (e.g. v0.6.8)"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -53,7 +55,8 @@ jobs:
     needs: version
     uses: ./.github/workflows/arch-package.yml
     with:
-      ref: refs/tags/${{ needs.version.outputs.tag }}
+      # A tag push builds the commit the tag pointed at when it was pushed
+      ref: ${{ github.event_name == 'push' && github.sha || format('refs/tags/{0}', needs.version.outputs.tag) }}
       pkgver: ${{ needs.version.outputs.pkgver }}
       pkgrel: ${{ inputs.pkgrel || '1' }}
 
@@ -69,9 +72,34 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.version.outputs.tag }}
       FULLVER: ${{ needs.build.outputs.pkgver }}
+      BUILT_COMMIT: ${{ needs.build.outputs.commit }}
     steps:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed github-cli
+
+      - name: Check tag and package version
+        run: |
+          # The tag must still point at the commit that was built
+          obj=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          while [[ $obj == "tag "* ]]; do  # annotated tag: follow it to the commit
+            obj=$(gh api "repos/$GH_REPO/git/tags/${obj#tag }" --jq '.object.type + " " + .object.sha')
+          done
+          if [[ $obj != "commit $BUILT_COMMIT" ]]; then
+            echo "::error::Tag $TAG points at '$obj', but the package was built from $BUILT_COMMIT"
+            exit 1
+          fi
+
+          # A rebuild must be newer than every package the release already has,
+          # or pacman won't see it as an upgrade
+          if gh release view "$TAG" --json assets --jq '.assets[].name' > published-assets; then
+            sed -n 's/^artemis-hyprland-\([0-9].*\)-x86_64\.pkg\.tar\.zst$/\1/p' published-assets > published-versions
+            while read -r version; do
+              if (( $(vercmp "$FULLVER" "$version") <= 0 )); then
+                echo "::error::$TAG already has package $version; run this workflow by hand with a higher pkgrel"
+                exit 1
+              fi
+            done < published-versions
+          fi
 
       - name: Download packages
         uses: actions/download-artifact@v4
@@ -92,9 +120,8 @@ jobs:
 
       - name: Write release notes
         run: |
-          sha=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
           cat > notes.md <<EOF
-          Arch Linux package for artemis-hyprland $FULLVER, built from \`$TAG\` (${sha:0:12}).
+          Arch Linux package for artemis-hyprland $FULLVER, built from \`$TAG\` (${BUILT_COMMIT:0:12}).
 
           Install directly:
 
@@ -103,7 +130,7 @@ jobs:
           Or use the releases as a pacman repository (packages are unsigned):
 
               [artemis-hyprland]
-              SigLevel = Optional TrustAll
+              SigLevel = Optional
               Server = https://github.com/$GH_REPO/releases/latest/download
 
           Replace \`latest/download\` with \`download/$TAG\` to pin this release.
@@ -112,8 +139,15 @@ jobs:
       - name: Publish
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
+            # Rebuild: upload the packages before the database that lists them,
+            # keep the older packages for clients that still have the old
+            # database, and point the notes at the new version
+            gh release upload "$TAG" dist/*.pkg.tar.zst
+            gh release upload "$TAG" --clobber \
+              dist/artemis-hyprland.db* dist/artemis-hyprland.files* dist/SHA256SUMS
+            gh release edit "$TAG" --title "artemis-hyprland $FULLVER" --notes-file notes.md
           else
+            # gh keeps the release a draft until all assets are uploaded
             gh release create "$TAG" dist/* --verify-tag \
               --title "artemis-hyprland $FULLVER" --notes-file notes.md
           fi

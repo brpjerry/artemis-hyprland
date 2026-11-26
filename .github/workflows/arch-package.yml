@@ -30,6 +30,9 @@ on:
       artifact:
         description: Name of the uploaded artifact holding the packages
         value: ${{ jobs.build.outputs.artifact }}
+      commit:
+        description: Commit the packages were built from
+        value: ${{ jobs.build.outputs.commit }}
   workflow_dispatch:
     inputs:
       pkgver:
@@ -57,12 +60,14 @@ jobs:
     outputs:
       pkgver: ${{ steps.build.outputs.pkgver }}
       artifact: ${{ steps.build.outputs.artifact }}
+      commit: ${{ steps.checkout.outputs.commit }}
     steps:
       # actions/checkout needs git in the container to produce a real clone
       - name: Install git
         run: pacman -Syu --noconfirm --needed git
 
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}

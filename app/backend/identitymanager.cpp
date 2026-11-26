@@ -71,11 +71,15 @@ void IdentityManager::createCredentials(QSettings& settings)
     // so build the name separately and copy it into the cert.
     X509_NAME* name = X509_NAME_new();
     THROW_BAD_ALLOC_IF_NULL(name);
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                               reinterpret_cast<unsigned char *>(const_cast<char*>("NVIDIA GameStream Client")),
-                               -1, -1, 0);
-    X509_set_subject_name(cert, name);
-    X509_set_issuer_name(cert, name);
+    // These only fail when OpenSSL can't allocate the copies
+    if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                   reinterpret_cast<const unsigned char*>("NVIDIA GameStream Client"),
+                                   -1, -1, 0) != 1 ||
+            X509_set_subject_name(cert, name) != 1 ||
+            X509_set_issuer_name(cert, name) != 1) {
+        X509_NAME_free(name);
+        throw std::bad_alloc();
+    }
     X509_NAME_free(name);
 
     X509_sign(cert, pk, EVP_sha256());

@@ -50,6 +50,7 @@ depends=(
   'libwayland-client.so'
 )
 makedepends=(
+  'ffnvcodec-headers'  # CUDA renderer (NVDEC on NVIDIA + Wayland)
   'git'
   'qt6-tools'
   'vulkan-headers'

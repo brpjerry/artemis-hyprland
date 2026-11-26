@@ -31,9 +31,9 @@ pacman -Syu --noconfirm --needed git
 id -u builder &>/dev/null || useradd --create-home builder
 as_builder() { runuser -u builder -- "$@"; }
 
-work=/home/builder/artemis
-rm -rf "$work"
-cp -a "$src" "$work"
+# A fresh directory, so nothing outside the container can be in the way
+work=$(mktemp -d /home/builder/artemis.XXXXXXXX)
+cp -a "$src/." "$work/"
 chown -R builder: "$work"
 
 # The Linux build needs these submodules. The large "libs" submodule only holds
@@ -42,7 +42,6 @@ as_builder git -C "$work" submodule update --init --recursive --depth 1 -- \
     moonlight-common-c/moonlight-common-c \
     qmdnsengine/qmdnsengine \
     h264bitstream/h264bitstream \
-    soundio/libsoundio \
     app/SDL_GameControllerDB
 
 cd "$work/packaging/arch"
@@ -53,7 +52,7 @@ pacman -S --noconfirm --needed "${deps[@]}"
 if [[ -n ${ARTEMIS_PKGVER:-} ]]; then
     pkgver=$ARTEMIS_PKGVER
     appver=$(tr -d '\r\n' < "$work/app/version.txt")
-    if [[ $pkgver != "$appver"* ]]; then
+    if [[ $pkgver != "$appver" ]]; then
         echo "::warning::Package version $pkgver doesn't match app/version.txt ($appver); the app will report $appver"
     fi
 else
@@ -70,12 +69,15 @@ fi
 # reset pkgrel when it rewrites the PKGBUILD.
 sed -i -e "s/^pkgver=.*/pkgver=$pkgver/" -e "s/^pkgrel=.*/pkgrel=$pkgrel/" PKGBUILD
 
-as_builder env ARTEMIS_PKGVER="$pkgver" MAKEFLAGS="-j$(nproc)" \
+# A fresh PKGDEST, so packages left in the source tree by an earlier local
+# makepkg run are not collected
+pkgdest=$(as_builder mktemp -d)
+as_builder env PKGDEST="$pkgdest" ARTEMIS_PKGVER="$pkgver" MAKEFLAGS="-j$(nproc)" \
     makepkg --noconfirm --cleanbuild --force
 
 mkdir -p "$out"
 shopt -s nullglob
-packages=(./*.pkg.tar.zst)
+packages=("$pkgdest"/*.pkg.tar.zst)
 if (( ${#packages[@]} == 0 )); then
     echo "error: makepkg produced no packages" >&2
     exit 1
