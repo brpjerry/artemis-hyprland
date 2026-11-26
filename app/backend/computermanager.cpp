@@ -980,9 +980,7 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
             NvHTTP http(m_Computer);
             
             qDebug() << "PendingOTPPairingTask: Starting Apollo OTP pairing";
-            qDebug() << "PendingOTPPairingTask: PIN from user:" << m_Pin;
-            qDebug() << "PendingOTPPairingTask: Passphrase from user:" << m_Passphrase;
-            
+
             // Generate a 16-byte salt
             QByteArray saltBytes(16, 0);
             for (int i = 0; i < 16; i++) {
@@ -996,7 +994,7 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
             hash.addData(plainText.toUtf8());
             QString otpHash = hash.result().toHex().toUpper();
             
-            qDebug() << "PendingOTPPairingTask: Generated OTP hash:" << otpHash;
+            // Don't log otpHash: with the salt it allows an offline search for the PIN and passphrase
             qDebug() << "PendingOTPPairingTask: Using salt:" << saltStr;
             
             // Build the pairing parameters - use consistent device name
@@ -1011,12 +1009,15 @@ qDebug() << "PendingOTPPairingTask: Generated AES key from salt+PIN";
                 .arg(otpHash);
             
             qDebug() << "PendingOTPPairingTask: Sending OTP pairing request";
-            
+
+            // NVLL_NONE keeps NvHTTP from logging the request URL, which carries otpauth.
+            // Failures still throw and are logged by the handlers below.
             QString pairingRequest = http.openConnectionToString(
                 http.m_BaseUrlHttp,
                 "pair",
                 pairingParams,
-                5000
+                5000,
+                NvHTTP::NvLogLevel::NVLL_NONE
             );
             
             qDebug() << "PendingOTPPairingTask: Received response:" << pairingRequest;

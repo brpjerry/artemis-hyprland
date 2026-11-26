@@ -44,7 +44,7 @@ CenteredGridView {
         ComputerManager.computerAddCompleted.disconnect(addComplete)
     }
 
-    function pairingComplete(error)
+    function pairingComplete(error, targetIndex)
     {
         console.log("PcView.pairingComplete called with error:", error)
         
@@ -61,11 +61,8 @@ CenteredGridView {
         } else {
             console.log("PcView: Pairing successful, attempting navigation")
             
-            // Successful pairing - navigate to AppView like Android does
-            // Find the computer that was just paired (should now be paired)
-            // Use OTP dialog's computer index if available, otherwise find first paired computer
-            var targetIndex = otpPairDialog.computerIndex >= 0 ? otpPairDialog.computerIndex : -1
-            
+            // Successful pairing - navigate to AppView like Android does.
+            // targetIndex is the current row of the host that completed pairing (PIN or OTP).
             console.log("PcView: Target index for navigation:", targetIndex)
             
             if (targetIndex >= 0) {
@@ -229,7 +226,7 @@ CenteredGridView {
                         pairDialog.pin = pin
                         pairDialog.open()
                     }
-                    visible: model.online && !model.paired
+                    visible: model.online && model.serverSupported && !model.paired
                 }
                 NavigableMenuItem {
                     text: qsTr("Pair using OTP")
@@ -238,7 +235,7 @@ CenteredGridView {
                         otpPairDialog.computerIndex = index
                         otpPairDialog.open()
                     }
-                    visible: model.online && !model.paired
+                    visible: model.online && model.serverSupported && !model.paired && model.otpSupported
                 }
                 NavigableMenuItem {
                     text: qsTr("Test Network")

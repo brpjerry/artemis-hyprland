@@ -46,6 +46,9 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
         return computer->isSupportedServerVersion;
     case ApolloVersionRole:
         return computer->apolloVersion;
+    case OTPSupportedRole:
+        // Same rule as isOTPSupported(), exposed as a role so QML bindings update
+        return !computer->isNvidiaServerSoftware;
     case DetailsRole: {
         QString state, pairState;
 
@@ -145,6 +148,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[ServerSupportedRole] = "serverSupported";
     names[DetailsRole] = "details";
     names[ApolloVersionRole] = "apolloVersion";
+    names[OTPSupportedRole] = "otpSupported";
 
     return names;
 }
@@ -273,10 +277,12 @@ bool ComputerModel::isOTPSupported(int computerIndex)
     return !computer->isNvidiaServerSoftware;
 }
 
-void ComputerModel::handlePairingCompleted(NvComputer*, QString error)
+void ComputerModel::handlePairingCompleted(NvComputer* computer, QString error)
 {
     qDebug() << "ComputerModel::handlePairingCompleted called with error:" << error;
-    emit pairingCompleted(error.isEmpty() ? QVariant() : error);
+    // Look the host up now rather than trusting an index saved when pairing
+    // started, since the list may have been reordered or changed since then.
+    emit pairingCompleted(error.isEmpty() ? QVariant() : error, m_Computers.indexOf(computer));
     qDebug() << "ComputerModel: Emitted pairingCompleted signal";
 }
 

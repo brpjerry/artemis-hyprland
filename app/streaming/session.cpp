@@ -444,14 +444,6 @@ void Session::getDecoderInfo(SDL_Window* window,
             isHdrSupported = false;
         }
 
-        // Try AV1 Main8 as fallback to check for general AV1 hardware support
-        // This allows AV1 to work even if 10-bit/HDR is not supported
-        if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
-                          StreamingPreferences::RS_PROBE_ONLY,
-                          window, VIDEO_FORMAT_AV1_MAIN8, 1920, 1080, 60,
-                          false, false, true, decoder)) {
-            delete decoder;
-        }
     }
 
     // Try a regular hardware accelerated HEVC decoder now
@@ -506,8 +498,10 @@ int Session::getActualFpsForDecoderTest() const
     
     // If fractional refresh rate is enabled, the fps might be multiplied by 1000 for Apollo
     if (m_Preferences->enableFractionalRefreshRate && fps > 1000) {
-        // Convert back from Apollo's internal representation (fps * 1000) to actual fps
-        fps = fps / 1000;
+        // Convert back from Apollo's internal representation (fps * 1000) to
+        // actual fps, rounding like the settings UI does (59.94 -> 60), so the
+        // display mode checks see the rate's real neighbour, not 59
+        fps = (fps + 500) / 1000;
     }
     
     return fps;
@@ -1044,6 +1038,8 @@ bool Session::initialize(QQuickWindow* qtWindow)
     if (m_ServerCommandManager && m_QuickMenuManager && m_ClipboardManager) {
         // Set up the ServerCommandManager with the computer and HTTP client
         NvHTTP* httpClient = new NvHTTP(m_Computer);
+        // setConnection() only borrows it; the manager's lifetime owns it
+        httpClient->setParent(m_ServerCommandManager);
         m_ServerCommandManager->setConnection(m_Computer, httpClient);
 
         // Connect the ServerCommandManager to the QuickMenuManager
@@ -2158,6 +2154,15 @@ void Session::exec()
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
+        // The quick menu is a QML window. While it's visible, the Qt event loop
+        // has to run for it to render, take input and close, but this loop owns
+        // the GUI thread. So pump Qt events here and wait on SDL only briefly,
+        // since the menu's input arrives on Qt's display connection, not SDL's.
+        const bool quickMenuVisible = m_QuickMenuManager && m_QuickMenuManager->isVisible();
+        if (quickMenuVisible) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
@@ -2168,7 +2173,7 @@ void Session::exec()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, 1000)) {
+        if (!SDL_WaitEventTimeout(&event, quickMenuVisible ? 10 : 1000)) {
             presence.runCallbacks();
             m_ClipboardManager->processStrandedWork();
             continue;

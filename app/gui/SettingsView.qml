@@ -1833,7 +1833,7 @@ Flickable {
                     function createModel() {
                         var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', parent, '')
 
-                        model.append({ text: qsTr("Auto (Vulkan, fallback to OpenGL)"), val: StreamingPreferences.RB_AUTO })
+                        model.append({ text: qsTr("Automatic"), val: StreamingPreferences.RB_AUTO })
                         model.append({ text: qsTr("Vulkan"), val: StreamingPreferences.RB_VULKAN })
                         model.append({ text: qsTr("OpenGL"), val: StreamingPreferences.RB_OPENGL })
                         return model

@@ -174,9 +174,19 @@ void ClipboardManager::setConnection(NvComputer *computer)
         takeOverQtClipboard(textFromQt);
     }
 
+    // Apollo's PERM bits (src/crypto.h): clipboard_set = 1 << 16,
+    // clipboard_read = 1 << 17. Only Apollo reports a Permission mask in
+    // serverinfo, so Sunshine and GFE hosts get no clipboard requests at all.
+    constexpr quint32 kApolloPermClipboardSet = 1u << 16;
+    constexpr quint32 kApolloPermClipboardRead = 1u << 17;
+    m_hostAcceptsUpload = false;
+    m_hostServesFetch = false;
     if (computer) {
         QReadLocker lock(&computer->lock);
-        qDebug() << "ClipboardManager: Connected to" << computer->name;
+        m_hostAcceptsUpload = (computer->serverPermissions & kApolloPermClipboardSet) != 0;
+        m_hostServesFetch = (computer->serverPermissions & kApolloPermClipboardRead) != 0;
+        qDebug() << "ClipboardManager: Connected to" << computer->name
+                 << "- upload:" << m_hostAcceptsUpload << "fetch:" << m_hostServesFetch;
     }
 
     if (changed) {
@@ -445,6 +455,10 @@ void ClipboardManager::uploadLocalClipboard(bool force)
     if (!isConnected()) {
         return;
     }
+    if (!m_hostAcceptsUpload) {
+        // Not an Apollo host, or this client may not set its clipboard
+        return;
+    }
 
     // Read the offer now: SDL can lose it (e.g. on focus loss) before an
     // upload in flight finishes. SDL returns an empty string if there's no
@@ -514,6 +528,10 @@ void ClipboardManager::startUpload(const QString &text, bool force)
 
 void ClipboardManager::requestFetch(bool force)
 {
+    if (!m_hostServesFetch) {
+        // Not an Apollo host, or this client may not read its clipboard
+        return;
+    }
     if (m_uploadInFlight || m_fetchInFlight) {
         // Fetch once the current request finishes, so the result reflects any
         // upload in flight. Coalesce with an earlier deferred fetch, keeping

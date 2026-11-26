@@ -9,16 +9,8 @@
 #include <QEventLoop>
 #include <QDebug>
 #include <QTimer>
+#include <QReadWriteLock>
 #include <Limelight.h>
-
-// Define static member
-const QList<ServerCommandManager::ServerCommand> ServerCommandManager::BUILTIN_COMMANDS = {
-    {"restart", "Restart Computer", "Restart the host computer", {}},
-    {"shutdown", "Shutdown Computer", "Shutdown the host computer", {}},
-    {"sleep", "Sleep Computer", "Put the host computer to sleep", {}},
-    {"hibernate", "Hibernate Computer", "Hibernate the host computer", {}},
-    {"lock", "Lock Computer", "Lock the host computer", {}}
-};
 
 ServerCommandManager::ServerCommandManager(QObject *parent)
     : QObject(parent)
@@ -77,68 +69,33 @@ bool ServerCommandManager::hasServerCommandPermission() const
 
 void ServerCommandManager::refreshCommands()
 {
-    if (m_refreshInProgress || !m_computer || !m_http) {
-        qDebug() << "ServerCommandManager::refreshCommands: Cannot refresh - inProgress:" << m_refreshInProgress
-                 << ", computer:" << (m_computer != nullptr)
-                 << ", http:" << (m_http != nullptr);
-        return;
-    }
-    
-    m_refreshInProgress = true;
     bool oldPermission = m_hasPermission;
-    
-    qDebug() << "ServerCommandManager::refreshCommands: Starting refresh";
-    qDebug() << "ServerCommandManager::refreshCommands: Server commands from computer:" << m_computer->serverCommands;
-    
-    // Check if server commands are available from serverinfo XML (Android approach)
-    if (!m_computer->serverCommands.isEmpty()) {
-        qDebug() << "ServerCommandManager::refreshCommands: Found server commands in serverinfo XML";
-        m_hasPermission = true;
-        m_availableCommands.clear();
-        m_commandNames.clear();
-        m_commandDescriptions.clear();
-        
-        // Use the commands from the serverinfo XML
-        for (const QString &cmd : m_computer->serverCommands) {
-            m_availableCommands.append(cmd);
-            m_commandNames[cmd] = cmd; // Use command ID as display name for now
-            m_commandDescriptions[cmd] = "Server command: " + cmd;
-        }
-        
-        qDebug() << "ServerCommandManager::refreshCommands: Loaded commands from serverinfo:" << m_availableCommands;
-    } else {
-        qDebug() << "ServerCommandManager::refreshCommands: No server commands in serverinfo XML, trying separate endpoint";
-        
-        // Try to fetch server commands from a separate endpoint (Apollo extension)
-        fetchAvailableCommands();
-        
-        // For now, assume Apollo server and populate with builtin commands as fallback
-        if (isApolloServer()) {
-            m_hasPermission = true;
-            m_availableCommands.clear();
-            m_commandNames.clear();
-            m_commandDescriptions.clear();
-            
-            for (const auto &cmd : BUILTIN_COMMANDS) {
-                m_availableCommands.append(cmd.id);
-                m_commandNames[cmd.id] = cmd.name;
-                m_commandDescriptions[cmd.id] = cmd.description;
-            }
-            
-            qDebug() << "ServerCommandManager::refreshCommands: Apollo server detected, using builtin commands:" << m_availableCommands;
-        } else {
-            m_hasPermission = false;
-            m_availableCommands.clear();
-            m_commandNames.clear();
-            m_commandDescriptions.clear();
-            
-            qDebug() << "ServerCommandManager::refreshCommands: Non-Apollo server, no commands available";
-        }
+
+    m_availableCommands.clear();
+    m_commandNames.clear();
+    m_commandDescriptions.clear();
+
+    // Apollo lists the commands this client may run in serverinfo, in the
+    // order LiSendExecServerCmd() indexes them. Use exactly that list: no
+    // network requests here (this runs while a stream starts) and no guessed
+    // commands, whose indices wouldn't match the host's.
+    QStringList commands;
+    if (m_computer) {
+        QReadLocker lock(&m_computer->lock);
+        commands = m_computer->serverCommands;
     }
-    
-    m_refreshInProgress = false;
+
+    for (const QString &cmd : commands) {
+        m_availableCommands.append(cmd);
+        m_commandNames[cmd] = cmd;
+        m_commandDescriptions[cmd] = "Server command: " + cmd;
+    }
+    m_hasPermission = !m_availableCommands.isEmpty();
+
+    qDebug() << "ServerCommandManager::refreshCommands: Commands from serverinfo:" << m_availableCommands;
+
     emit commandsRefreshed();
-    
+
     if (oldPermission != m_hasPermission) {
         emit permissionChanged();
     }
@@ -232,145 +189,6 @@ bool ServerCommandManager::isApolloServer() const
     return true;
 }
 
-void ServerCommandManager::fetchAvailableCommands()
-{
-    if (!m_http || !m_computer) {
-        qDebug() << "ServerCommandManager::fetchAvailableCommands: No HTTP client or computer available";
-        return;
-    }
-    
-    qDebug() << "ServerCommandManager::fetchAvailableCommands: Trying to fetch server commands from separate endpoint";
-    
-    // Try different possible endpoints where Apollo might expose server commands
-    QStringList possibleEndpoints = {
-        "servercommands",
-        "commands",
-        "api/commands",
-        "api/servercommands",
-        "servercommands.xml",
-        "commands.xml"
-    };
-    
-    for (const QString &endpoint : possibleEndpoints) {
-        try {
-            qDebug() << "ServerCommandManager::fetchAvailableCommands: Trying endpoint:" << endpoint;
-            
-            // Use the existing NvHTTP method to make the request
-            QString response = m_http->openConnectionToString(m_http->m_BaseUrlHttps,
-                                                             endpoint,
-                                                             nullptr,
-                                                             5000, // 5 second timeout
-                                                             NvHTTP::NVLL_VERBOSE);
-            
-            // Convert to QByteArray
-            QByteArray responseData = response.toUtf8();
-            
-            qDebug() << "ServerCommandManager::fetchAvailableCommands: Received response from" << endpoint << "(" << responseData.size() << "bytes)";
-            qDebug() << "ServerCommandManager::fetchAvailableCommands: Response content:" << responseData;
-            
-            // Try to parse the response as XML
-            if (parseServerCommandsXml(responseData)) {
-                qDebug() << "ServerCommandManager::fetchAvailableCommands: Successfully parsed server commands from endpoint:" << endpoint;
-                return; // Success! Exit early
-            }
-            
-            qWarning() << "ServerCommandManager::fetchAvailableCommands: Failed to parse server commands from endpoint:" << endpoint;
-            
-        } catch (const GfeHttpResponseException& e) {
-            qDebug() << "ServerCommandManager::fetchAvailableCommands: Failed to fetch from" << endpoint << "with error:" << e.toQString();
-        } catch (const QtNetworkReplyException& e) {
-            qDebug() << "ServerCommandManager::fetchAvailableCommands: Network error for" << endpoint << ":" << e.toQString();
-        }
-    }
-    
-    qDebug() << "ServerCommandManager::fetchAvailableCommands: No server commands found from any endpoint";
-}
-
-bool ServerCommandManager::parseServerCommandsXml(const QByteArray &xmlData)
-{
-    qDebug() << "ServerCommandManager::parseServerCommandsXml: Parsing XML data";
-    
-    if (xmlData.isEmpty()) {
-        qWarning() << "ServerCommandManager::parseServerCommandsXml: Empty XML data";
-        return false;
-    }
-    
-    QXmlStreamReader xml(xmlData);
-    QStringList parsedCommands;
-    QStringList commandNames;
-    QStringList commandDescriptions;
-    
-    while (!xml.atEnd()) {
-        xml.readNext();
-        
-        if (xml.isStartElement()) {
-            if (xml.name().toString() == "ServerCommand") {
-                // Parse Apollo/Android style server command
-                QString commandText = xml.readElementText();
-                if (!commandText.isEmpty()) {
-                    parsedCommands.append(commandText);
-                    commandNames.append(commandText);
-                    commandDescriptions.append("Server command: " + commandText);
-                    qDebug() << "ServerCommandManager::parseServerCommandsXml: Found server command:" << commandText;
-                }
-            } else if (xml.name().toString() == "Command") {
-                // Parse alternative command format
-                QString commandId;
-                QString commandName;
-                QString commandDescription;
-                
-                // Read attributes
-                QXmlStreamAttributes attributes = xml.attributes();
-                if (attributes.hasAttribute("id")) {
-                    commandId = attributes.value("id").toString();
-                }
-                if (attributes.hasAttribute("name")) {
-                    commandName = attributes.value("name").toString();
-                }
-                if (attributes.hasAttribute("description")) {
-                    commandDescription = attributes.value("description").toString();
-                }
-                
-                // If no attributes, try to read as text
-                if (commandId.isEmpty()) {
-                    commandId = xml.readElementText();
-                }
-                
-                if (!commandId.isEmpty()) {
-                    parsedCommands.append(commandId);
-                    commandNames.append(commandName.isEmpty() ? commandId : commandName);
-                    commandDescriptions.append(commandDescription.isEmpty() ? ("Server command: " + commandId) : commandDescription);
-                    qDebug() << "ServerCommandManager::parseServerCommandsXml: Found command:" << commandId << "name:" << commandName << "description:" << commandDescription;
-                }
-            }
-        }
-    }
-    
-    if (xml.hasError()) {
-        qWarning() << "ServerCommandManager::parseServerCommandsXml: XML parsing error:" << xml.errorString();
-        return false;
-    }
-    
-    if (parsedCommands.isEmpty()) {
-        qWarning() << "ServerCommandManager::parseServerCommandsXml: No commands found in XML";
-        return false;
-    }
-    
-    // Update our command lists
-    m_hasPermission = true;
-    m_availableCommands = parsedCommands;
-    m_commandNames.clear();
-    m_commandDescriptions.clear();
-    
-    for (int i = 0; i < parsedCommands.size(); ++i) {
-        m_commandNames[parsedCommands[i]] = commandNames[i];
-        m_commandDescriptions[parsedCommands[i]] = commandDescriptions[i];
-    }
-    
-    qDebug() << "ServerCommandManager::parseServerCommandsXml: Successfully parsed" << parsedCommands.size() << "commands:" << parsedCommands;
-    return true;
-}
-
 void ServerCommandManager::sendCommandExecution(const QString &commandId)
 {
     qDebug() << "ServerCommandManager: Sending command execution:" << commandId;
@@ -384,16 +202,9 @@ void ServerCommandManager::sendCommandExecution(const QString &commandId)
         return;
     }
 
-    // Use available commands (either from server or builtin fallback)
-    QStringList serverCommands = m_computer->serverCommands;
-    if (serverCommands.isEmpty()) {
-        // Fall back to using our available commands list
-        serverCommands = m_availableCommands;
-        qDebug() << "ServerCommandManager: Using builtin commands as fallback:" << serverCommands;
-    } else {
-        qDebug() << "ServerCommandManager: Using server-provided commands:" << serverCommands;
-    }
-    
+    // Index into the same serverinfo list refreshCommands() published, which
+    // is the order the host executes commands by
+    const QStringList serverCommands = m_availableCommands;
     if (serverCommands.isEmpty()) {
         qWarning() << "ServerCommandManager: No server commands available";
         m_isExecuting = false;
@@ -452,13 +263,6 @@ void ServerCommandManager::sendCommandExecution(const QString &commandId)
         qWarning() << "ServerCommandManager: Command execution failed:" << commandId << "with result:" << result;
         emit commandFailed(commandId, QString("Command execution failed with result: %1").arg(result));
     }
-}
-
-void ServerCommandManager::onCommandsReceived()
-{
-    // TODO: Handle response from fetchAvailableCommands()
-    // This would parse the HTTP response and update available commands
-    qDebug() << "ServerCommandManager: Commands received from server";
 }
 
 void ServerCommandManager::onCommandExecutionFinished()
@@ -524,91 +328,6 @@ void ServerCommandManager::onComputerStateChanged()
             }
         });
     }
-}
-
-bool ServerCommandManager::sendHttpServerCommand(const QString &commandId)
-{
-    if (!m_http || !m_computer) {
-        qDebug() << "ServerCommandManager::sendHttpServerCommand: No HTTP client or computer available";
-        return false;
-    }
-    
-    // Map command IDs to Apollo server command names
-    QString apolloCommand;
-    if (commandId == "shutdown_server") {
-        apolloCommand = "shutdown";
-    } else if (commandId == "restart_server") {
-        apolloCommand = "restart";
-    } else if (commandId == "shutdown_computer") {
-        apolloCommand = "shutdown";
-    } else if (commandId == "restart_computer") {
-        apolloCommand = "restart";
-    } else if (commandId == "suspend_computer") {
-        apolloCommand = "suspend";
-    } else if (commandId == "hibernate_computer") {
-        apolloCommand = "hibernate";
-    } else {
-        qDebug() << "ServerCommandManager::sendHttpServerCommand: Unknown command ID:" << commandId;
-        return false;
-    }
-    
-    qDebug() << "ServerCommandManager::sendHttpServerCommand: Sending HTTP command:" << apolloCommand << "for command ID:" << commandId;
-    
-    try {
-        // Use the Apollo server command endpoint
-        QString arguments = "command=" + apolloCommand;
-        QString response = m_http->openConnectionToString(m_http->m_BaseUrlHttps,
-                                                         "actions/server",
-                                                         arguments.toUtf8().constData(),
-                                                         10000, // 10 second timeout
-                                                         NvHTTP::NVLL_VERBOSE);
-        
-        qDebug() << "ServerCommandManager::sendHttpServerCommand: Received response:" << response;
-        
-        // Parse the response to check for success
-        // Apollo server typically returns JSON or XML responses
-        if (response.contains("success") || response.contains("200") || response.contains("OK")) {
-            qDebug() << "ServerCommandManager::sendHttpServerCommand: Command executed successfully via HTTP";
-            
-            // Reset execution state and emit success
-            m_isExecuting = false;
-            m_currentExecutingCommand.clear();
-            emit executionStateChanged();
-            emit commandExecuted(commandId, true, "Command executed successfully via HTTP");
-            return true;
-        } else {
-            qWarning() << "ServerCommandManager::sendHttpServerCommand: Command failed via HTTP, response:" << response;
-            
-            // Reset execution state and emit failure
-            m_isExecuting = false;
-            m_currentExecutingCommand.clear();
-            emit executionStateChanged();
-            emit commandFailed(commandId, "HTTP command execution failed: " + response);
-            return true; // Return true to indicate we handled the command (even if it failed)
-        }
-        
-    } catch (const GfeHttpResponseException& e) {
-        qDebug() << "ServerCommandManager::sendHttpServerCommand: HTTP error:" << e.toQString();
-        
-        // Reset execution state and emit failure
-        m_isExecuting = false;
-        m_currentExecutingCommand.clear();
-        emit executionStateChanged();
-        emit commandFailed(commandId, "HTTP command execution failed: " + e.toQString());
-        return true; // Return true to indicate we handled the command (even if it failed)
-        
-    } catch (const QtNetworkReplyException& e) {
-        qDebug() << "ServerCommandManager::sendHttpServerCommand: Network error:" << e.toQString();
-        
-        // Reset execution state and emit failure
-        m_isExecuting = false;
-        m_currentExecutingCommand.clear();
-        emit executionStateChanged();
-        emit commandFailed(commandId, "HTTP command execution failed: " + e.toQString());
-        return true; // Return true to indicate we handled the command (even if it failed)
-    }
-    
-    return false;
 }
 
 void ServerCommandManager::noCommandsAvailable()

@@ -70,6 +70,8 @@ void IdentityManager::createCredentials(QSettings& settings)
             X509_set_subject_name(cert, name) != 1 ||
             X509_set_issuer_name(cert, name) != 1) {
         X509_NAME_free(name);
+        X509_free(cert);
+        EVP_PKEY_free(pk);
         throw std::bad_alloc();
     }
     X509_NAME_free(name);

@@ -224,7 +224,7 @@ Rectangle {
             text: qsTr("Quit")
             icon: "❌"
             action: "quit"
-            description: qsTr("Quit streaming session")
+            description: qsTr("Quit the app on the host and close Artemis")
         }
         ListElement {
             text: qsTr("Server Commands")
@@ -292,7 +292,17 @@ Rectangle {
     
     function executeAction(action) {
         console.log("Executing action:", action)
-        
+
+        // Dispatch by the menu the entry came from: host command names are
+        // host-defined and may match a local action's name (e.g. "quit")
+        if (currentMenu === "server_commands") {
+            if (quickMenuManager.serverCommandManager) {
+                quickMenuManager.serverCommandManager.executeCommand(action);
+            }
+            closeMenuDelayed();
+            return;
+        }
+
         // Handle navigation actions
         if (action === "server_commands") {
             if (quickMenuManager.serverCommandManager && quickMenuManager.serverCommandManager.hasPermission) {
@@ -302,16 +312,6 @@ Rectangle {
                 closeMenuDelayed();
             }
             return;
-        } else { // It might be a server command
-            for (var i = 0; i < serverCommandsModel.count; i++) {
-                if (serverCommandsModel.get(i).action === action) {
-                    if (quickMenuManager.serverCommandManager) {
-                        quickMenuManager.serverCommandManager.executeCommand(action);
-                        closeMenuDelayed();
-                    }
-                    return;
-                }
-            }
         }
         
         // Show action feedback
