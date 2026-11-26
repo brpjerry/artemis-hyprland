@@ -77,30 +77,6 @@ jobs:
       - name: Install tools
         run: pacman -Syu --noconfirm --needed github-cli
 
-      - name: Check tag and package version
-        run: |
-          # The tag must still point at the commit that was built
-          obj=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
-          while [[ $obj == "tag "* ]]; do  # annotated tag: follow it to the commit
-            obj=$(gh api "repos/$GH_REPO/git/tags/${obj#tag }" --jq '.object.type + " " + .object.sha')
-          done
-          if [[ $obj != "commit $BUILT_COMMIT" ]]; then
-            echo "::error::Tag $TAG points at '$obj', but the package was built from $BUILT_COMMIT"
-            exit 1
-          fi
-
-          # A rebuild must be newer than every package the release already has,
-          # or pacman won't see it as an upgrade
-          if gh release view "$TAG" --json assets --jq '.assets[].name' > published-assets; then
-            sed -n 's/^artemis-hyprland-\([0-9].*\)-x86_64\.pkg\.tar\.zst$/\1/p' published-assets > published-versions
-            while read -r version; do
-              if (( $(vercmp "$FULLVER" "$version") <= 0 )); then
-                echo "::error::$TAG already has package $version; run this workflow by hand with a higher pkgrel"
-                exit 1
-              fi
-            done < published-versions
-          fi
-
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
@@ -118,36 +94,59 @@ jobs:
           sha256sum -- * > SHA256SUMS
           ls -l
 
+      # The title and notes don't name a package release, so a rebuild with a
+      # higher pkgrel leaves them, and anything added to them, unchanged.
       - name: Write release notes
         run: |
           cat > notes.md <<EOF
-          Arch Linux package for artemis-hyprland $FULLVER, built from \`$TAG\` (${BUILT_COMMIT:0:12}).
+          Arch Linux packages for artemis-hyprland, built from \`$TAG\` (${BUILT_COMMIT:0:12}).
 
-          Install directly:
-
-              sudo pacman -U artemis-hyprland-$FULLVER-x86_64.pkg.tar.zst
-
-          Or use the releases as a pacman repository (packages are unsigned):
+          Use the releases as a pacman repository (packages are unsigned):
 
               [artemis-hyprland]
               SigLevel = Optional
               Server = https://github.com/$GH_REPO/releases/latest/download
 
           Replace \`latest/download\` with \`download/$TAG\` to pin this release.
+
+          Or install directly: download the \`artemis-hyprland-<version>-x86_64.pkg.tar.zst\` asset with the highest version, then run \`sudo pacman -U\` on it.
           EOF
 
       - name: Publish
         run: |
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            # Rebuild: upload the packages before the database that lists them,
-            # keep the older packages for clients that still have the old
-            # database, and point the notes at the new version
+          # The tag must still point at the commit that was built. This runs
+          # right before uploading to keep the window for a moved tag small.
+          obj=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          while [[ $obj == "tag "* ]]; do  # annotated tag: follow it to the commit
+            obj=$(gh api "repos/$GH_REPO/git/tags/${obj#tag }" --jq '.object.type + " " + .object.sha')
+          done
+          if [[ $obj != "commit $BUILT_COMMIT" ]]; then
+            echo "::error::Tag $TAG points at '$obj', but the package was built from $BUILT_COMMIT"
+            exit 1
+          fi
+
+          # One release lookup decides what follows. Any error other than a
+          # missing release stops the job instead of skipping the checks.
+          if gh release view "$TAG" --json assets --jq '.assets[].name' > published-assets 2> view-error; then
+            # Rebuild: it must be newer than every package the release already
+            # has, or pacman won't see it as an upgrade
+            sed -n 's/^artemis-hyprland-\([0-9].*\)-x86_64\.pkg\.tar\.zst$/\1/p' published-assets > published-versions
+            while read -r version; do
+              if (( $(vercmp "$FULLVER" "$version") <= 0 )); then
+                echo "::error::$TAG already has package $version; run this workflow by hand with a higher pkgrel"
+                exit 1
+              fi
+            done < published-versions
+            # Upload the packages before the database that lists them, and keep
+            # the older packages for clients that still have the old database
             gh release upload "$TAG" dist/*.pkg.tar.zst
             gh release upload "$TAG" --clobber \
               dist/artemis-hyprland.db* dist/artemis-hyprland.files* dist/SHA256SUMS
-            gh release edit "$TAG" --title "artemis-hyprland $FULLVER" --notes-file notes.md
-          else
+          elif grep -qFx 'release not found' view-error; then
             # gh keeps the release a draft until all assets are uploaded
             gh release create "$TAG" dist/* --verify-tag \
-              --title "artemis-hyprland $FULLVER" --notes-file notes.md
+              --title "artemis-hyprland $TAG" --notes-file notes.md
+          else
+            cat view-error >&2
+            exit 1
           fi
