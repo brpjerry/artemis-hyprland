@@ -11,7 +11,14 @@
 #include <QThread>
 #include <QThreadPool>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QRandomGenerator>
+#include <QRegularExpression>
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/x509.h>
 
 #define SER_HOSTS "hosts"
 #define SER_HOSTS_BACKUP "hostsbackup"

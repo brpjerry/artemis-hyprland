@@ -16,7 +16,6 @@
 #include <QtEndian>
 #include <QNetworkProxy>
 #include <QSysInfo>
-#include <QRandomGenerator>
 
 #define FAST_FAIL_TIMEOUT_MS 2000
 #define REQUEST_TIMEOUT_MS 5000
@@ -388,6 +387,9 @@ NvHTTP::getAppList()
                 else if (XML_NAME_EQUALS(name, "ID")) {
                     apps.last().id = xmlReader.readElementText().toInt();
                 }
+                else if (XML_NAME_EQUALS(name, "UUID")) {
+                    apps.last().uuid = xmlReader.readElementText();
+                }
                 else if (XML_NAME_EQUALS(name, "IsHdrSupported")) {
                     apps.last().hdrSupported = xmlReader.readElementText() == "1";
                 }
@@ -573,8 +575,9 @@ NvHTTP::openConnection(QUrl baseUrl,
     url.setPath("/" + command);
 
     // Use a placeholder UID for GFE allow them to quit games for each other.
+    // Non-GFE hosts (including Apollo) get this client's persistent unique ID.
     url.setQuery("uniqueid=" + (m_UseTrueUid ? IdentityManager::get()->getUniqueId() : "0123456789ABCDEF") +
-                 "&uuid=" + QUuid::createUuid().toRfc4122().toHex() +
+                 "&uuid=" + QUuid::createUuid().toString(QUuid::WithoutBraces) +
                  ((arguments != nullptr) ? ("&" + arguments) : ""));
 
     QNetworkRequest request(url);
@@ -728,8 +731,20 @@ NvHTTP::sendClipboardContent(const QString& content)
         request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 #endif
 
+        // Same connection handling as openConnection()
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+        request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, -1);
+#elif QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+        request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, 0);
+#endif
+
+        // Accept the host's pinned self-signed certificate. NvHTTP connects
+        // this handler per request (see openConnection()); without it the
+        // TLS handshake fails on the certificate's host name.
+        auto sslErrorsConnection = connect(m_Nam, &QNetworkAccessManager::sslErrors, this, &NvHTTP::handleSslErrors);
+
         // Send POST request with clipboard content
-        QNetworkReply* reply = m_Nam.post(request, content.toUtf8());
+        QNetworkReply* reply = m_Nam->post(request, content.toUtf8());
 
         // Wait for response with timeout
         QEventLoop loop;
@@ -739,6 +754,11 @@ NvHTTP::sendClipboardContent(const QString& content)
         
         qDebug() << "NvHTTP: Sending clipboard content to server:" << url.toString();
         loop.exec(QEventLoop::ExcludeUserInputEvents);
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
+        m_Nam->clearAccessCache();
+#endif
+        disconnect(sslErrorsConnection);
 
         // Check for timeout
         if (!reply->isFinished()) {

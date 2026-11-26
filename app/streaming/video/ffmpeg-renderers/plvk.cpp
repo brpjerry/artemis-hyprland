@@ -7,6 +7,13 @@
 // Use a C shim to call libplacebo's libav helpers from C++ safely
 #include "pl_libav_shim.h"
 
+#if PL_API_VER < 360
+// testRenderFrame() needs pl_frame_from_avframe() to work around a crash in
+// older libplacebo versions. Implementation in plvk_c.c
+#define PL_LIBAV_IMPLEMENTATION 0
+#include <libplacebo/utils/libav.h>
+#endif
+
 #include <SDL_vulkan.h>
 
 extern "C" {
@@ -54,11 +61,6 @@ extern "C" {
 #endif
 #ifndef PL_COLOR_HDR_BLACK
 #define PL_COLOR_HDR_BLACK 0.0f
-#endif
-
-// Compatibility definitions for missing libplacebo overlay constants
-#ifndef PL_OVERLAY_COORDS_DST_FRAME
-#define PL_OVERLAY_COORDS_DST_FRAME 0
 #endif
 
 // Compatibility struct for VkQueueFamilyVideoPropertiesKHR
@@ -173,18 +175,14 @@ static void pl_log_cb(void*, enum pl_log_level level, const char *msg)
 
 void PlVkRenderer::lockQueue(struct AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index)
 {
-    Q_UNUSED(dev_ctx);
-    Q_UNUSED(queue_family);
-    Q_UNUSED(index);
-    // No-op for compatibility across libplacebo versions
+    auto me = (PlVkRenderer*)dev_ctx->user_opaque;
+    me->m_Vulkan->lock_queue(me->m_Vulkan, queue_family, index);
 }
 
 void PlVkRenderer::unlockQueue(struct AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index)
 {
-    Q_UNUSED(dev_ctx);
-    Q_UNUSED(queue_family);
-    Q_UNUSED(index);
-    // No-op for compatibility across libplacebo versions
+    auto me = (PlVkRenderer*)dev_ctx->user_opaque;
+    me->m_Vulkan->unlock_queue(me->m_Vulkan, queue_family, index);
 }
 
 void PlVkRenderer::overlayUploadComplete(void* opaque)
@@ -667,6 +665,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         hwDeviceContext->user_opaque = this; // Used by lockQueue()/unlockQueue()
 
         auto vkDeviceContext = (AVVulkanDeviceContext*)((AVHWDeviceContext *)m_HwDeviceCtx->data)->hwctx;
+        vkDeviceContext->get_proc_addr = m_PlVkInstance->get_proc_addr;
         vkDeviceContext->inst = m_PlVkInstance->instance;
         vkDeviceContext->phys_dev = m_Vulkan->phys_device;
         vkDeviceContext->act_dev = m_Vulkan->device;
@@ -782,10 +781,8 @@ bool PlVkRenderer::mapAvFrameToPlacebo(const AVFrame *frame, pl_frame* mappedFra
     else
 #endif
     {
-        pl_avframe_params mapParams = {};
-        mapParams.frame = frame;
-        mapParams.tex = m_Textures;
-        if (!pl_map_avframe_ex(m_Vulkan->gpu, mappedFrame, &mapParams)) {
+        // mappedFrame is an out-parameter (pl_frame*). Pass it directly to the C shim.
+        if (!pl_map_avframe_simple((const void *)m_Vulkan->gpu, mappedFrame, frame, (void *)m_Textures)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "pl_map_avframe_ex() failed");
             return false;
@@ -822,12 +819,28 @@ void PlVkRenderer::unmapAvFrameFromPlacebo(const AVFrame *frame, pl_frame* mappe
     Q_UNUSED(frame)
 #endif
     {
-        pl_unmap_avframe(m_Vulkan->gpu, mappedFrame);
+        pl_unmap_avframe_simple((const void *)m_Vulkan->gpu, mappedFrame);
     }
 }
 
 bool PlVkRenderer::populateQueues(int videoFormat)
 {
+    auto vkDeviceContext = (AVVulkanDeviceContext*)((AVHWDeviceContext *)m_HwDeviceCtx->data)->hwctx;
+
+    uint32_t queueFamilyCount = 0;
+    fn_vkGetPhysicalDeviceQueueFamilyProperties2(m_Vulkan->phys_device, &queueFamilyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount);
+    std::vector<VkQueueFamilyVideoPropertiesKHR> queueFamilyVideoProps(queueFamilyCount);
+    for (uint32_t i = 0; i < queueFamilyCount; i++) {
+        queueFamilyVideoProps[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+        queueFamilies[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+        queueFamilies[i].pNext = &queueFamilyVideoProps[i];
+    }
+
+    fn_vkGetPhysicalDeviceQueueFamilyProperties2(m_Vulkan->phys_device, &queueFamilyCount, queueFamilies.data());
+
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(59, 34, 100)
     Q_UNUSED(videoFormat);
 
     uint32_t maxQf = SDL_min(queueFamilyCount, (uint32_t)SDL_arraysize(vkDeviceContext->qf));
@@ -872,7 +885,24 @@ bool PlVkRenderer::populateQueues(int videoFormat)
                 // the physical device supports it earlier.
                 if (queueFamilyVideoProps[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_KHR)
 #endif
+                {
+                    vkDeviceContext->queue_family_decode_index = i;
+                    vkDeviceContext->nb_decode_queues = queueFamilies[i].queueFamilyProperties.queueCount;
+                    break;
+                }
+            }
+            else {
+                SDL_assert(false);
+            }
+        }
     }
+
+    if (vkDeviceContext->queue_family_decode_index < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Unable to find compatible video decode queue!");
+        return false;
+    }
+#endif
 
     return true;
 }

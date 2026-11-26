@@ -52,6 +52,14 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
+#define SER_RENDERERBACKEND "rendererbackend"
+
+// Artemis client-side streaming enhancements
+#define SER_VIRTUALDISPLAY "virtualdisplay"
+#define SER_FRACTIONALREFRESHRATE "fractionalrefreshrate"
+#define SER_CUSTOMREFRESHRATE "customrefreshrate"
+#define SER_RESOLUTIONSCALING "resolutionscaling"
+#define SER_RESOLUTIONSCALEFACTOR "resolutionscalefactor"
 
 #define CURRENT_DEFAULT_VER 2
 

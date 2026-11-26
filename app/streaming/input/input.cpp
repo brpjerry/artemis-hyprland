@@ -130,6 +130,13 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     m_SpecialKeyCombos[KeyComboQuitAndExit].scanCode = SDL_SCANCODE_E;
     m_SpecialKeyCombos[KeyComboQuitAndExit].enabled = true;
 
+    // KeyComboToggleServerCommands removed - now handled through QuickMenu
+
+    m_SpecialKeyCombos[KeyComboToggleQuickMenu].keyCombo = KeyComboToggleQuickMenu;
+    m_SpecialKeyCombos[KeyComboToggleQuickMenu].keyCode = SDLK_BACKSLASH;
+    m_SpecialKeyCombos[KeyComboToggleQuickMenu].scanCode = SDL_SCANCODE_BACKSLASH;
+    m_SpecialKeyCombos[KeyComboToggleQuickMenu].enabled = true;
+
     m_SpecialKeyCombos[KeyComboToggleKeyboardGrab].keyCombo = KeyComboToggleKeyboardGrab;
     m_SpecialKeyCombos[KeyComboToggleKeyboardGrab].keyCode = SDLK_k;
     m_SpecialKeyCombos[KeyComboToggleKeyboardGrab].scanCode = SDL_SCANCODE_K;

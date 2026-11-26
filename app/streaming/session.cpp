@@ -447,6 +447,7 @@ void Session::getDecoderInfo(SDL_Window* window,
         // Try AV1 Main8 as fallback to check for general AV1 hardware support
         // This allows AV1 to work even if 10-bit/HDR is not supported
         if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
+                          StreamingPreferences::RS_PROBE_ONLY,
                           window, VIDEO_FORMAT_AV1_MAIN8, 1920, 1080, 60,
                           false, false, true, decoder)) {
             delete decoder;
@@ -544,6 +545,9 @@ bool Session::populateDecoderProperties(SDL_Window* window)
 {
     IVideoDecoder* decoder;
 
+    // Use actual fps for decoder testing (handles Apollo's fps * 1000 representation)
+    int testFps = getActualFpsForDecoderTest();
+
     // NB: We pass the real renderer selection rather than RS_PROBE_ONLY
     // here because this is operating on the real streaming window, and
     // instantiating Metal or AVSBDL renderers can interfere with MoltenVK's
@@ -614,11 +618,11 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_PortTestResults(0),
       m_OpusDecoder(nullptr),
       m_AudioRenderer(nullptr),
-    m_AudioSampleCount(0),
-    m_DropAudioEndTime(0),
-    m_QuickMenuManager(new QuickMenuManager()),
-    m_ServerCommandManager(new ServerCommandManager()),
-    m_ClipboardManager(ClipboardManager::instance())
+      m_AudioSampleCount(0),
+      m_DropAudioEndTime(0),
+      m_QuickMenuManager(new QuickMenuManager()),
+      m_ServerCommandManager(new ServerCommandManager()),
+      m_ClipboardManager(ClipboardManager::instance())
 {
 }
 
@@ -626,6 +630,18 @@ Session::~Session()
 {
     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
+
+    if (m_QuickMenuManager) {
+        delete m_QuickMenuManager;
+        m_QuickMenuManager = nullptr;
+    }
+    if (m_ServerCommandManager) {
+        delete m_ServerCommandManager;
+        m_ServerCommandManager = nullptr;
+    }
+    // m_ClipboardManager is the shared process-wide instance. It is only
+    // connected while exec() runs the SDL event loop, so there is nothing to
+    // clean up here.
 
     SDL_DestroyMutex(m_DecoderLock);
 }
@@ -897,7 +913,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
                                           m_Preferences->enableYUV444 ? VIDEO_FORMAT_AV1_HIGH8_444 : VIDEO_FORMAT_AV1_MAIN8,
                                           m_StreamConfig.width,
                                           m_StreamConfig.height,
-                                          m_StreamConfig.fps) != DecoderAvailability::Hardware) {
+                                          getActualFpsForDecoderTest()) != DecoderAvailability::Hardware) {
             m_SupportedVideoFormats.deprioritizeByMask(VIDEO_FORMAT_MASK_AV1);
         }
 
@@ -1024,6 +1040,29 @@ bool Session::initialize(QQuickWindow* qtWindow)
         return false;
     }
 
+    // Initialize ServerCommandManager and ClipboardManager after everything is configured
+    if (m_ServerCommandManager && m_QuickMenuManager && m_ClipboardManager) {
+        // Set up the ServerCommandManager with the computer and HTTP client
+        NvHTTP* httpClient = new NvHTTP(m_Computer);
+        m_ServerCommandManager->setConnection(m_Computer, httpClient);
+
+        // Connect the ServerCommandManager to the QuickMenuManager
+        m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
+        
+        // Connect the ClipboardManager to the QuickMenuManager
+        m_QuickMenuManager->setClipboardManager(m_ClipboardManager);
+        
+        // Connect signals for permission updates
+        connect(m_ServerCommandManager, &ServerCommandManager::permissionChanged,
+                m_QuickMenuManager, &QuickMenuManager::serverCommandsChanged);
+        
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "ServerCommandManager and ClipboardManager initialized and connected to QuickMenuManager");
+    } else {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Failed to initialize ServerCommandManager, ClipboardManager or QuickMenuManager is null");
+    }
+
     return true;
 }
 
@@ -1078,7 +1117,7 @@ bool Session::validateLaunch(SDL_Window* testWindow)
                                         VIDEO_FORMAT_AV1_MAIN8,
                                         m_StreamConfig.width,
                                         m_StreamConfig.height,
-                                        m_StreamConfig.fps) != DecoderAvailability::Hardware) {
+                                        getActualFpsForDecoderTest()) != DecoderAvailability::Hardware) {
                 emitLaunchWarning(tr("Using software decoding due to your selection to force AV1 without GPU support. This may cause poor streaming performance."));
             }
 
@@ -1108,7 +1147,7 @@ bool Session::validateLaunch(SDL_Window* testWindow)
                                         VIDEO_FORMAT_H265,
                                         m_StreamConfig.width,
                                         m_StreamConfig.height,
-                                        m_StreamConfig.fps) != DecoderAvailability::Hardware) {
+                                        getActualFpsForDecoderTest()) != DecoderAvailability::Hardware) {
                 emitLaunchWarning(tr("Using software decoding due to your selection to force HEVC without GPU support. This may cause poor streaming performance."));
             }
 
@@ -1554,7 +1593,7 @@ void Session::updateOptimalWindowDisplayMode()
         for (int i = 0; i < numDisplayModes; i++) {
             if (SDL_GetDisplayMode(displayIndex, i, &mode) == 0) {
                 if (mode.w == desktopMode.w && mode.h == desktopMode.h &&
-                    mode.refresh_rate % m_StreamConfig.fps == 0) {
+                    mode.refresh_rate % getActualFpsForDecoderTest() == 0) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Found display mode with desktop resolution: %dx%dx%d",
                                 mode.w, mode.h, mode.refresh_rate);
@@ -1574,12 +1613,27 @@ void Session::updateOptimalWindowDisplayMode()
     if (bestMode.refresh_rate == 0) {
         float bestModeAspectRatio = 0;
         float videoAspectRatio = (float)m_ActiveVideoWidth / (float)m_ActiveVideoHeight;
+
+        if (aspectRatioDebug) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Aspect Ratio Debug: Looking for display modes matching video aspect ratio %.3f",
+                        videoAspectRatio);
+        }
+
         int numDisplayModes = SDL_GetNumDisplayModes(displayIndex);
         for (int i = 0; i < numDisplayModes; i++) {
             if (SDL_GetDisplayMode(displayIndex, i, &mode) == 0) {
                 float modeAspectRatio = (float)mode.w / (float)mode.h;
                 if (mode.w >= m_ActiveVideoWidth && mode.h >= m_ActiveVideoHeight &&
-                        mode.refresh_rate % m_StreamConfig.fps == 0) {
+                        mode.refresh_rate % getActualFpsForDecoderTest() == 0) {
+
+                    if (aspectRatioDebug) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Aspect Ratio Debug: Considering mode %dx%dx%d (%.3f) - aspect diff=%.3f",
+                                    mode.w, mode.h, mode.refresh_rate, modeAspectRatio,
+                                    fabs(videoAspectRatio - modeAspectRatio));
+                    }
+
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Found display mode with video resolution: %dx%dx%d",
                                 mode.w, mode.h, mode.refresh_rate);
@@ -1587,10 +1641,20 @@ void Session::updateOptimalWindowDisplayMode()
                             (bestModeAspectRatio == 0 || fabs(videoAspectRatio - modeAspectRatio) <= fabs(videoAspectRatio - bestModeAspectRatio))) {
                         bestMode = mode;
                         bestModeAspectRatio = modeAspectRatio;
+
+                        if (aspectRatioDebug) {
+                            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                        "Aspect Ratio Debug: New best mode %dx%dx%d (%.3f) - diff=%.3f",
+                                        mode.w, mode.h, mode.refresh_rate, modeAspectRatio,
+                                        fabs(videoAspectRatio - modeAspectRatio));
+                        }
                     }
                 }
             }
-        }    if (bestMode.refresh_rate == 0) {
+        }
+    }
+
+    if (bestMode.refresh_rate == 0) {
         // We may find no match if the user has moved a 120 FPS
         // stream onto a 60 Hz monitor (since no refresh rate can
         // divide our FPS setting). We'll stick to the default in
@@ -1897,6 +1961,10 @@ void Session::exec()
         return;
     }
 
+    // The Qt event loop won't run during the stream, so Qt can't keep serving
+    // the clipboard. Let ClipboardManager move it to SDL for the stream.
+    m_ClipboardManager->prepareForStream();
+
     // Pump the Qt event loop one last time before we create our SDL window
     // This is sometimes necessary for the QML code to process any signals
     // we've emitted from the async connection thread.
@@ -2083,6 +2151,9 @@ void Session::exec()
     // Switch to async logging mode when we enter the SDL loop
     StreamUtils::enterAsyncLoggingMode();
 
+    // Clipboard sync runs on this event loop, from here until DispatchDeferredCleanup
+    m_ClipboardManager->setConnection(m_Computer);
+
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
@@ -2186,6 +2257,8 @@ void Session::exec()
                     m_AudioMuted = false;
                 }
                 m_InputHandler->notifyFocusGained();
+
+                m_ClipboardManager->onStreamFocusGained();
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
@@ -2450,6 +2523,10 @@ void Session::exec()
     }
 
 DispatchDeferredCleanup:
+    // Stop clipboard sync while the window and SDL video are still alive, so
+    // the clipboard can be handed over to Qt
+    m_ClipboardManager->disconnect();
+
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
 

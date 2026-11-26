@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-	<id>com.moonlight_stream.Moonlight</id>
+	<id>com.artemis_desktop.Artemis</id>
 	<metadata_license>CC0-1.0</metadata_license>
 	<project_license>GPL-3.0+</project_license>
 	<name>Artemis</name>
@@ -20,24 +20,19 @@
 		</ul>
 	</description>
 
-	<url type="homepage">https://moonlight-stream.org</url>
-	<url type="bugtracker">https://github.com/moonlight-stream/moonlight-qt/issues</url>
-	<url type="help">https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide</url>
-	<url type="vcs-browser">https://github.com/moonlight-stream/moonlight-qt</url>
-	<developer id="org.moonlight-stream">
-		<name>Moonlight Game Streaming Team</name>
+	<url type="homepage">https://github.com/wjbeckett/artemis</url>
+	<url type="bugtracker">https://github.com/wjbeckett/artemis/issues</url>
+	<url type="help">https://github.com/wjbeckett/artemis/wiki</url>
+	<url type="vcs-browser">https://github.com/wjbeckett/artemis</url>
+	<developer id="org.artemis_desktop">
+		<name>Artemis Desktop Project</name>
 	</developer>
-	<update_contact>cameron@moonlight-stream.org</update_contact>
-	<launchable type="desktop-id">com.moonlight_stream.Moonlight.desktop</launchable>
+	<update_contact>will@artemis-desktop.org</update_contact>
+	<launchable type="desktop-id">com.artemis_desktop.Artemis.desktop</launchable>
 	<provides>
-		<binary>moonlight</binary>
+		<binary>artemis</binary>
 	</provides>
-	<content_rating type="oars-1.1" />	
-
-	<branding>
-		<color type="primary" scheme_preference="light">#710085</color>
-		<color type="primary" scheme_preference="dark">#55285d</color>
-	</branding>
+	<content_rating type="oars-1.1" />
 
 	<screenshots>
 		<screenshot type="default">
@@ -895,4 +890,8 @@
 		</release>
 	</releases>
 
+	<categories>
+		<category>Game</category>
+		<category>Qt</category>
+	</categories>
 </component>

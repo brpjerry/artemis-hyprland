@@ -471,7 +471,7 @@ int main(int argc, char *argv[])
     if (IS_UNSPECIFIED_HANDLE(oldConErr))
 #endif
     {
-        s_LoggerFile = new QFile(tempDir.filePath(QString("Moonlight-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
+        s_LoggerFile = new QFile(tempDir.filePath(QString("Artemis-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
 
         // The log directory may be shared with other users (/tmp on macOS), so
         // we must never open a file or symlink that someone else planted there.

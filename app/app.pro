@@ -362,7 +362,8 @@ libplacebo {
         streaming/video/ffmpeg-renderers/plvk_c.c \
         streaming/video/ffmpeg-renderers/pl_libav_shim.c
     HEADERS += \
-        streaming/video/ffmpeg-renderers/plvk.h
+        streaming/video/ffmpeg-renderers/plvk.h \
+        streaming/video/ffmpeg-renderers/pl_libav_shim.h
 
     macx {
         SOURCES += streaming/video/ffmpeg-renderers/plvk_objc.mm

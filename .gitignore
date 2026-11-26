@@ -11,11 +11,50 @@ qrc_*.cpp
 ui_*.h
 *.pro.user*
 
-
-**/.vs/
-.vscode/
+# Build directories
 build/
+release/
+debug/
+
+# Platform specific
+*.dmg
+*.exe
+*.deb
+*.rpm
+*.AppImage
+*.zip
+*.tar.gz
+
+# Qt Creator
+*.pro.user
+*.autosave
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Windows
+Thumbs.db
+*.pdb
+
+# Logs
+*.log
+
+# Dependencies
+node_modules/
 libs/
+
+# Generated QML cache
+*qmlcache*
+
+# Config tests
 config.tests/*/.qmake.stash
 config.tests/*/Makefile
 

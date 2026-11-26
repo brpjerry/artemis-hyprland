@@ -151,6 +151,11 @@ int FFmpegVideoDecoder::getDecoderCapabilities()
                 {"hevc_omx", 0},
 
                 // AV1
+                {"av1_rkmpp", CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1},
+                {"av1_nvv4l2", CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1},
+                {"av1_nvmpi", 0},
+                {"av1_v4l2m2m", 0},
+                {"av1_omx", 0},
             };
 
             // We have a non-hwaccel hardware decoder. This will always
@@ -372,15 +377,51 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
     Q_UNUSED(glIsSlow);
     Q_UNUSED(vulkanIsSlow);
 
+    // Read preferred renderer backend (Auto/Vulkan/OpenGL)
+    StreamingPreferences::RendererBackend preferredBackend = StreamingPreferences::RB_AUTO;
+    if (auto prefs = StreamingPreferences::get()) {
+        preferredBackend = prefs->rendererBackend;
+    }
+
     // For cases where we're already using Vulkan Video decoding, always use the Vulkan renderer too.
     // The alternate frontend logic is primarily for cases where a different renderer like EGL or DRM
     // may provide additional performance or HDR capabilities. Neither of these are true for Vulkan.
     if (useAlternateFrontend && m_BackendRenderer->getRendererType() != IFFmpegRenderer::RendererType::Vulkan) {
+        // Respect user's preferred frontend renderer first, then fall back to existing logic
+#ifdef HAVE_LIBPLACEBO_VULKAN
+        if (preferredBackend == StreamingPreferences::RB_VULKAN) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Renderer preference: Trying Vulkan (PlVkRenderer) as frontend first");
+            m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
+            if (initializeRendererInternal(m_FrontendRenderer, params)) {
+                return true;
+            }
+            delete m_FrontendRenderer;
+            m_FrontendRenderer = nullptr;
+        }
+#endif
+#ifdef HAVE_EGL
+        if (preferredBackend == StreamingPreferences::RB_OPENGL && m_BackendRenderer->canExportEGL()) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Renderer preference: Trying OpenGL (EGLRenderer) as frontend first");
+            m_FrontendRenderer = new EGLRenderer(m_BackendRenderer);
+            if (initializeRendererInternal(m_FrontendRenderer, params)) {
+                return true;
+            }
+            delete m_FrontendRenderer;
+            m_FrontendRenderer = nullptr;
+        }
+#endif
+
         if (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "HDR Debug: Creating alternate frontend renderer for 10-bit content");
 #ifdef HAVE_LIBPLACEBO_VULKAN
             if (!vulkanIsSlow) {
                 // The Vulkan renderer can also handle HDR with a supported compositor. We prefer
                 // rendering HDR with Vulkan if possible since it's more fully featured than DRM.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "HDR Debug: Trying PlVkRenderer for 10-bit content");
                 m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
                 if (initializeRendererInternal(m_FrontendRenderer, params) && (m_FrontendRenderer->getRendererAttributes() & RENDERER_ATTRIBUTE_HDR_SUPPORT)) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -425,6 +466,8 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
             if (vulkanIsSlow) {
                 // Try Vulkan even if it's slow because we have no other renderer
                 // that can display HDR properly on Linux.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "HDR Debug: Trying PlVkRenderer (VULKAN_IS_SLOW) for 10-bit content");
                 m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
                 if (initializeRendererInternal(m_FrontendRenderer, params) && (m_FrontendRenderer->getRendererAttributes() & RENDERER_ATTRIBUTE_HDR_SUPPORT)) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -476,6 +519,32 @@ bool FFmpegVideoDecoder::createFrontendRenderer(PDECODER_PARAMETERS params, bool
     else {
         // The backend renderer cannot directly render to the display, so
         // we will create an SDL or DRM renderer to draw the frames.
+
+        // Respect user's preferred frontend first where possible
+#ifdef HAVE_LIBPLACEBO_VULKAN
+        if (preferredBackend == StreamingPreferences::RB_VULKAN) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Renderer preference: Trying Vulkan (PlVkRenderer) frontend");
+            m_FrontendRenderer = new PlVkRenderer(AV_HWDEVICE_TYPE_NONE, m_BackendRenderer);
+            if (initializeRendererInternal(m_FrontendRenderer, params)) {
+                return true;
+            }
+            delete m_FrontendRenderer;
+            m_FrontendRenderer = nullptr;
+        }
+#endif
+#ifdef HAVE_EGL
+        if (preferredBackend == StreamingPreferences::RB_OPENGL && m_BackendRenderer->canExportEGL()) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Renderer preference: Trying OpenGL (EGLRenderer) frontend");
+            m_FrontendRenderer = new EGLRenderer(m_BackendRenderer);
+            if (initializeRendererInternal(m_FrontendRenderer, params)) {
+                return true;
+            }
+            delete m_FrontendRenderer;
+            m_FrontendRenderer = nullptr;
+        }
+#endif
 
 #ifdef HAVE_DRM
         if (glIsSlow || vulkanIsSlow) {

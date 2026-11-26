@@ -217,6 +217,14 @@ public:
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
+    RendererBackend rendererBackend;
+    
+    // Artemis client-side streaming enhancements
+    bool useVirtualDisplay;
+    bool enableFractionalRefreshRate;
+    double customRefreshRate;
+    bool enableResolutionScaling;
+    int resolutionScaleFactor;
 
 signals:
     void displayModeChanged();
@@ -255,6 +263,14 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void rendererBackendChanged();
+    
+    // Artemis client-side streaming enhancement signals
+    void useVirtualDisplayChanged();
+    void enableFractionalRefreshRateChanged();
+    void customRefreshRateChanged();
+    void enableResolutionScalingChanged();
+    void resolutionScaleFactorChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

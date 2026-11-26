@@ -292,6 +292,7 @@ bool ClipboardManager::currentEndpoint(Endpoint *endpoint, quint64 *generation) 
     endpoint->address = computer->activeAddress;
     endpoint->httpsPort = computer->activeHttpsPort;
     endpoint->serverCert = computer->serverCert;
+    endpoint->useTrueUid = !computer->isNvidiaServerSoftware;
 
     if (endpoint->address.isNull()) {
         qWarning() << "ClipboardManager: Host has no active address";
@@ -688,7 +689,7 @@ void ClipboardManager::runHttpQueue()
             m_httpQueue.pop_front();
         }
 
-        NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert);
+        NvHTTP http(job.endpoint.address, job.endpoint.httpsPort, job.endpoint.serverCert, job.endpoint.useTrueUid);
 
         bool uploadSucceeded = false;
         QString fetchedContent;

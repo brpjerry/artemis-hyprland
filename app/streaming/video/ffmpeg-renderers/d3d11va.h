@@ -92,6 +92,7 @@ private:
     int m_DisplayWidth;
     int m_DisplayHeight;
     AVColorTransferCharacteristic m_SwapChainColorTrc;
+    bool m_HdrModeEnabled;
 
     bool m_AllowTearing;
 

@@ -221,6 +221,26 @@ CenteredGridView {
                     visible: !model.online && model.wakeable
                 }
                 NavigableMenuItem {
+                    text: qsTr("Pair")
+                    onTriggered: {
+                        // Use standard pairing for GeForce Experience
+                        var pin = computerModel.generatePinString()
+                        computerModel.pairComputer(index, pin)
+                        pairDialog.pin = pin
+                        pairDialog.open()
+                    }
+                    visible: model.online && !model.paired
+                }
+                NavigableMenuItem {
+                    text: qsTr("Pair using OTP")
+                    onTriggered: {
+                        // Show OTP pairing dialog
+                        otpPairDialog.computerIndex = index
+                        otpPairDialog.open()
+                    }
+                    visible: model.online && !model.paired
+                }
+                NavigableMenuItem {
                     text: qsTr("Test Network")
                     onTriggered: {
                         computerModel.testConnectionForComputer(index)

@@ -75,6 +75,7 @@ public:
           m_CommandQueue(nullptr),
           m_SwMappingTextures{},
           m_MetalView(nullptr),
+          m_HdrModeEnabled(false),
           m_LastFrameWidth(-1),
           m_LastFrameHeight(-1),
           m_LastDrawableWidth(-1),
@@ -872,21 +873,18 @@ public:
     
     void setHdrMode(bool enabled) override
     {
-        if (m_HdrModeEnabled == enabled) {
-            return; // No change needed
+        if (m_HdrModeEnabled != enabled) {
+            m_HdrModeEnabled = enabled;
+
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "VTMetalRenderer: HDR mode %s",
+                        enabled ? "ENABLED" : "DISABLED");
         }
-        
-        m_HdrModeEnabled = enabled;
-        
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "VTMetalRenderer: HDR mode %s", 
-                    enabled ? "ENABLED" : "DISABLED");
-        
-        // Force colorspace re-evaluation on next frame
-        m_LastColorSpace = -1;
-        
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "VTMetalRenderer: Reset colorspace cache to force HDR mode update");
+
+        // Always chain to VTBaseRenderer, even if the mode is unchanged, since
+        // it refreshes the HDR metadata and sets m_HdrMetadataChanged. That
+        // forces updateColorSpaceForFrame() to re-evaluate on the next frame.
+        VTBaseRenderer::setHdrMode(enabled);
     }
 
     bool isPixelFormatSupported(int videoFormat, AVPixelFormat pixelFormat) override
@@ -983,6 +981,7 @@ private:
     id<MTLCommandQueue> m_CommandQueue;
     id<MTLTexture> m_SwMappingTextures[MAX_VIDEO_PLANES];
     SDL_MetalView m_MetalView;
+    bool m_HdrModeEnabled;
     int m_LastFrameWidth;
     int m_LastFrameHeight;
     int m_LastDrawableWidth;

@@ -146,6 +146,7 @@ private:
         NvAddress address;
         uint16_t httpsPort = 0;
         QSslCertificate serverCert;
+        bool useTrueUid = true; // NvHTTP sends the real client UID to non-GFE hosts
     };
 
     struct HttpJob

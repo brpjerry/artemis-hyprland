@@ -3,8 +3,6 @@
 
 #include <QGuiApplication>
 #include <QLibraryInfo>
-#include <QFile>
-#include <QProcess>
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
@@ -32,6 +30,35 @@ private:
         QSize maximumResolution;
 
         Session::getDecoderInfo(m_Properties->testWindow, hasHardwareAcceleration, rendererAlwaysFullScreen, supportsHdr, maximumResolution);
+
+        // Allow environment variable override for HDR support (for testing and debugging)
+        if (qgetenv("FORCE_HDR_SUPPORT") == "1") {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "SystemProperties: Forcing HDR support via FORCE_HDR_SUPPORT environment variable (was: %s)",
+                        supportsHdr ? "ENABLED" : "DISABLED");
+            supportsHdr = true;
+        }
+
+        // Allow environment variable override for hardware acceleration (for Flatpak and testing)
+        if (qgetenv("ARTEMIS_FORCE_HW_ACCEL") == "1") {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "SystemProperties: Forcing hardware acceleration via ARTEMIS_FORCE_HW_ACCEL environment variable (was: %s)",
+                        hasHardwareAcceleration ? "ENABLED" : "DISABLED");
+            hasHardwareAcceleration = true;
+        }
+
+        // Additional debug logging for HDR capability investigation
+        if (qgetenv("HDR_DEBUG") == "1") {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "SystemProperties HDR Debug: Hardware acceleration=%s, Renderer fullscreen=%s, HDR support=%s",
+                        hasHardwareAcceleration ? "YES" : "NO",
+                        rendererAlwaysFullScreen ? "YES" : "NO",
+                        supportsHdr ? "YES" : "NO");
+        }
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "SystemProperties: Final HDR support status: %s",
+                    supportsHdr ? "ENABLED" : "DISABLED");
 
         // Propagate the decoder properties to the SystemProperties singleton and emit any change signals on the main thread
         QMetaObject::invokeMethod(m_Properties, "updateDecoderProperties",
@@ -276,5 +303,6 @@ void SystemProperties::refreshDisplays()
             }
         }
     }
-}
 
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}

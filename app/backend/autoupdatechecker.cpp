@@ -141,16 +141,8 @@ void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply* reply)
             return;
         }
 
-        for (const auto& updateEntry : std::as_const(array)) {
-            if (updateEntry.isObject()) {
-                QJsonObject updateObj = updateEntry.toObject();
-                if (!updateObj.contains("platform") ||
-                        !updateObj.contains("arch") ||
-                        !updateObj.contains("version") ||
-                        !updateObj.contains("browser_url")) {
-                    qWarning() << "Update manifest entry missing vital field";
-                    continue;
-                }
+        // Get the most recent release (first in the array)
+        QJsonObject releaseObj = releasesArray[0].toObject();
 
         // Extract version from tag_name (remove 'v' prefix if present)
         QString tagName = releaseObj["tag_name"].toString();

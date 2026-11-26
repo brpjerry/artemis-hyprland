@@ -61,6 +61,7 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
       m_DevicesWithFL11Support(0),
       m_DevicesWithCodecSupport(0),
       m_SwapChainColorTrc(AVCOL_TRC_UNSPECIFIED),
+      m_HdrModeEnabled(false),
       m_AllowTearing(false),
       m_OverlayLock(0),
       m_HwDeviceContext(nullptr)
@@ -1194,9 +1195,10 @@ bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayType type, int w
     }
     else if (type == Overlay::OverlayServerCommands) {
         // Center
-        renderRect.x = (m_DisplayWidth - newSurface->w) / 2;
-        renderRect.y = (m_DisplayHeight - newSurface->h) / 2;
-    } else {
+        renderRect.x = (m_DisplayWidth - width) / 2;
+        renderRect.y = (m_DisplayHeight - height) / 2;
+    }
+    else {
         SDL_assert(false);
     }
 
@@ -1561,7 +1563,7 @@ void D3D11VARenderer::setHdrMode(bool enabled)
     
     // Force color transfer characteristic re-evaluation on next frame
     // This will trigger the HDR colorspace setup in renderFrame()
-    m_LastColorTrc = AVCOL_TRC_UNSPECIFIED;
+    m_SwapChainColorTrc = AVCOL_TRC_UNSPECIFIED;
     
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "D3D11VARenderer: Reset color transfer characteristic cache to force HDR mode update");
