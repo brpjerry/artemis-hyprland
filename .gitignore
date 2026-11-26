@@ -49,6 +49,7 @@ Thumbs.db
 
 # Dependencies
 node_modules/
+libs/
 
 # Generated QML cache
 *qmlcache*

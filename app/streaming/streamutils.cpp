@@ -38,12 +38,15 @@
 #include <asm/hwprobe.h>
 #include <sys/syscall.h>
 #else
-#define __NR_riscv_hwprobe 258
 struct riscv_hwprobe {
     int64_t key;
     uint64_t value;
 };
 #define RISCV_HWPROBE_KEY_IMA_EXT_0 4
+#endif
+
+#ifndef __NR_riscv_hwprobe
+#define __NR_riscv_hwprobe 258
 #endif
 
 // RISC-V Scalar AES [E]ncryption and [D]ecryption
@@ -68,16 +71,61 @@ static int __riscv_hwprobe(struct riscv_hwprobe *pairs, size_t pair_count,
 #endif
 #endif
 
+#if defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)
+#include <sys/auxv.h>
+#endif
+
 Uint32 StreamUtils::getPlatformWindowFlags()
 {
-#if defined(Q_OS_DARWIN)
-    return SDL_WINDOW_METAL;
-#elif defined(HAVE_LIBPLACEBO_VULKAN)
+#if defined(HAVE_LIBPLACEBO_VULKAN)
     // We'll fall back to GL if Vulkan fails
     return SDL_WINDOW_VULKAN;
+#elif defined(Q_OS_DARWIN)
+    // Vulkan needs to supersede Metal, otherwise the Vulkan library won't be loaded
+    return SDL_WINDOW_METAL;
 #else
     return 0;
 #endif
+}
+
+SDL_Window* StreamUtils::createTestWindow()
+{
+    SDL_Window* testWindow;
+    Uint32 baseFlags = 0;
+
+    // Stop text input before creating the test window to avoid sdl2-compat
+    // starting text input on the new window. This might trigger the IME to
+    // be displayed.
+    SDL_StopTextInput();
+
+    // Test windows are always hidden
+    baseFlags |= SDL_WINDOW_HIDDEN;
+
+    // Creating a Vulkan surface with KMSDRM requires finding a display mode
+    // that exactly matches the window size. This is not always possible,
+    // particularly with drivers (Nvidia) that only expose modes matching
+    // the current resolution (only differing by refresh rate). Fullscreen
+    // desktop mode ensures the window size exactly matches the display mode
+    // which prevents false Vulkan renderer failures during decoder probing.
+    if (QString(SDL_GetCurrentVideoDriver()) == "KMSDRM") {
+        baseFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+
+    // Try to add the platform-specific flags first and fall back if that fails
+    testWindow = SDL_CreateWindow("", 0, 0, 1280, 720,
+                                  baseFlags | StreamUtils::getPlatformWindowFlags());
+    if (!testWindow) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Failed to create test window with platform flags: %s",
+                    SDL_GetError());
+
+        testWindow = SDL_CreateWindow("", 0, 0, 1280, 720, baseFlags);
+        if (!testWindow) {
+            return nullptr;
+        }
+    }
+
+    return testWindow;
 }
 
 void StreamUtils::scaleSourceToDestinationSurface(SDL_Rect* src, SDL_Rect* dst)
@@ -176,11 +224,21 @@ bool StreamUtils::hasFastAes()
 #elif defined(Q_OS_DARWIN)
     // Everything that runs Catalina and later has AES-NI or ARMv8 crypto instructions
     return true;
+#elif (defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 4
+    unsigned long hwcap2;
+    if (elf_aux_info(AT_HWCAP2, &hwcap2, sizeof(hwcap2)) != 0)
+        hwcap2 = 0;
+    return (hwcap2 & HWCAP2_AES);
+#elif (defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 8
+    unsigned long hwcap;
+    if (elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap)) != 0)
+        hwcap = 0;
+    return (hwcap & HWCAP_AES);
 #elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 4
     return getauxval(AT_HWCAP2) & HWCAP2_AES;
 #elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM) && QT_POINTER_SIZE == 8
     return getauxval(AT_HWCAP) & HWCAP_AES;
-#elif defined(Q_PROCESSOR_RISCV)
+#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_RISCV)
     riscv_hwprobe pairs[1] = {
         { RISCV_HWPROBE_KEY_IMA_EXT_0, 0 },
     };
@@ -208,7 +266,7 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
     CGDirectDisplayID displayIds[MAX_DISPLAYS];
     uint32_t displayCount = 0;
     CGGetActiveDisplayList(MAX_DISPLAYS, displayIds, &displayCount);
-    if (displayIndex >= displayCount) {
+    if (displayIndex < 0 || displayIndex >= (int)displayCount) {
         return false;
     }
 
@@ -219,6 +277,12 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
     // native on macOS using the SDL API alone. We'll talk to CoreGraphics to
     // find the correct resolution and match it in our SDL list.
     CFArrayRef modeList = CGDisplayCopyAllDisplayModes(displayIds[displayIndex], nullptr);
+    if (modeList == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "CGDisplayCopyAllDisplayModes() returned NULL for display %d",
+                     displayIndex);
+        return false;
+    }
     CFIndex count = CFArrayGetCount(modeList);
     for (CFIndex i = 0; i < count; i++) {
         auto cgMode = (CGDisplayModeRef)(CFArrayGetValueAtIndex(modeList, i));
@@ -279,7 +343,7 @@ bool StreamUtils::getNativeDesktopMode(int displayIndex, SDL_DisplayMode* mode, 
 #else
     SDL_assert(SDL_WasInit(SDL_INIT_VIDEO));
 
-    if (displayIndex >= SDL_GetNumVideoDisplays()) {
+    if (displayIndex < 0 || displayIndex >= SDL_GetNumVideoDisplays()) {
         return false;
     }
 
@@ -404,4 +468,16 @@ int StreamUtils::getDrmFd(bool preferRenderNode)
 #endif
 
     return -1;
+}
+
+extern QAtomicInt g_AsyncLoggingEnabled;
+
+void StreamUtils::enterAsyncLoggingMode()
+{
+    g_AsyncLoggingEnabled.ref();
+}
+
+void StreamUtils::exitAsyncLoggingMode()
+{
+    g_AsyncLoggingEnabled.deref();
 }

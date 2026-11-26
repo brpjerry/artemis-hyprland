@@ -13,7 +13,7 @@ void AppModel::initialize(ComputerManager* computerManager, int computerIndex, b
     connect(m_ComputerManager, &ComputerManager::computerStateChanged,
             this, &AppModel::handleComputerStateChanged);
 
-    Q_ASSERT(computerIndex < m_ComputerManager->getComputers().count());
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_ComputerManager->getComputers().count());
     m_Computer = m_ComputerManager->getComputers().at(computerIndex);
     m_CurrentGameId = m_Computer->currentGameId;
     m_ShowHiddenGames = showHiddenGames;
@@ -41,7 +41,7 @@ QString AppModel::getRunningAppName()
 
 Session* AppModel::createSessionForApp(int appIndex)
 {
-    Q_ASSERT(appIndex < m_VisibleApps.count());
+    Q_ASSERT(appIndex >= 0 && appIndex < m_VisibleApps.count());
     NvApp app = m_VisibleApps.at(appIndex);
 
     return new Session(m_Computer, app);
@@ -73,7 +73,7 @@ QVariant AppModel::data(const QModelIndex &index, int role) const
     if (!index.isValid())
         return QVariant();
 
-    Q_ASSERT(index.row() < m_VisibleApps.count());
+    Q_ASSERT(index.row() >= 0 && index.row() < m_VisibleApps.count());
     NvApp app = m_VisibleApps.at(index.row());
 
     switch (role)
@@ -120,7 +120,7 @@ void AppModel::quitRunningApp()
 
 bool AppModel::isAppCurrentlyVisible(const NvApp& app)
 {
-    for (const NvApp& visibleApp : m_VisibleApps) {
+    for (const NvApp& visibleApp : std::as_const(m_VisibleApps)) {
         if (app.id == visibleApp.id) {
             return true;
         }
@@ -156,7 +156,7 @@ void AppModel::updateAppList(QVector<NvApp> newList)
         const NvApp& existingApp = m_VisibleApps.at(i);
 
         bool found = false;
-        for (const NvApp& newApp : newVisibleList) {
+        for (const NvApp& newApp : std::as_const(newVisibleList)) {
             if (existingApp.id == newApp.id) {
                 // If the data changed, update it in our list
                 if (existingApp != newApp) {
@@ -178,7 +178,7 @@ void AppModel::updateAppList(QVector<NvApp> newList)
     }
 
     // Process additions now
-    for (const NvApp& newApp : newVisibleList) {
+    for (const NvApp& newApp : std::as_const(newVisibleList)) {
         int insertionIndex = m_VisibleApps.size();
         bool found = false;
 
@@ -207,7 +207,7 @@ void AppModel::updateAppList(QVector<NvApp> newList)
 
 void AppModel::setAppHidden(int appIndex, bool hidden)
 {
-    Q_ASSERT(appIndex < m_VisibleApps.count());
+    Q_ASSERT(appIndex >= 0 && appIndex < m_VisibleApps.count());
     int appId = m_VisibleApps.at(appIndex).id;
 
     {
@@ -226,7 +226,7 @@ void AppModel::setAppHidden(int appIndex, bool hidden)
 
 void AppModel::setAppDirectLaunch(int appIndex, bool directLaunch)
 {
-    Q_ASSERT(appIndex < m_VisibleApps.count());
+    Q_ASSERT(appIndex >= 0 && appIndex < m_VisibleApps.count());
     int appId = m_VisibleApps.at(appIndex).id;
 
     {

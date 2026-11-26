@@ -87,7 +87,7 @@ public:
 
     bool getToggleOptionValue(QString name, bool defaultValue) const
     {
-        static QRegularExpression re(QString("^(%1|no-%1)$").arg(name));
+        QRegularExpression re(QString("^(%1|no-%1)$").arg(name));
         QStringList options = optionNames().filter(re);
         if (options.isEmpty()) {
             return defaultValue;
@@ -195,7 +195,7 @@ GlobalCommandLineParser::ParseResult GlobalCommandLineParser::parse(const QStrin
             }
         }
 
-        parser.showError(QString("Invalid action"));
+        parser.showError("Invalid action");
     }
 }
 
@@ -278,7 +278,7 @@ void PairCommandLineParser::parse(const QStringList &args)
     }
     m_Host = parser.positionalArguments().at(1);
     m_PredefinedPin = parser.value("pin");
-    if (!m_PredefinedPin.isEmpty() && m_PredefinedPin.length() != 4) {
+    if (!m_PredefinedPin.isEmpty() && !QRegularExpression("^\\d{4}$").match(m_PredefinedPin).hasMatch()) {
         parser.showError("PIN must be 4 digits");
     }
 }

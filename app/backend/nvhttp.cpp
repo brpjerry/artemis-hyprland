@@ -16,7 +16,6 @@
 #include <QtEndian>
 #include <QNetworkProxy>
 #include <QSysInfo>
-#include <QRandomGenerator>
 
 #define FAST_FAIL_TIMEOUT_MS 2000
 #define REQUEST_TIMEOUT_MS 5000
@@ -24,8 +23,16 @@
 #define RESUME_TIMEOUT_MS 30000
 #define QUIT_TIMEOUT_MS 30000
 
-NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert) :
-    m_ServerCert(serverCert)
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#define XML_NAME_EQUALS(x, y) ((x) == (y))
+#else
+#define XML_NAME_EQUALS(x, y) ((x) == (u##y))
+#endif
+
+NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert, bool useTrueUid, QNetworkAccessManager* nam) :
+    m_Nam(nam ? nam : new QNetworkAccessManager(this)),
+    m_ServerCert(serverCert),
+    m_UseTrueUid(useTrueUid)
 {
     m_BaseUrlHttp.setScheme("http");
     m_BaseUrlHttps.setScheme("https");
@@ -35,15 +42,12 @@ NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert
 
     // Never use a proxy server
     QNetworkProxy noProxy(QNetworkProxy::NoProxy);
-    m_Nam.setProxy(noProxy);
-
-    connect(&m_Nam, &QNetworkAccessManager::sslErrors, this, &NvHTTP::handleSslErrors);
+    m_Nam->setProxy(noProxy);
 }
 
-NvHTTP::NvHTTP(NvComputer* computer) :
-    NvHTTP(computer->activeAddress, computer->activeHttpsPort, computer->serverCert)
+NvHTTP::NvHTTP(NvComputer* computer, QNetworkAccessManager* nam) :
+    NvHTTP(computer->activeAddress, computer->activeHttpsPort, computer->serverCert, !computer->isNvidiaServerSoftware, nam)
 {
-
 }
 
 void NvHTTP::setServerCert(QSslCertificate serverCert)
@@ -66,6 +70,11 @@ void NvHTTP::setAddress(NvAddress address)
 void NvHTTP::setHttpsPort(uint16_t port)
 {
     m_BaseUrlHttps.setPort(port);
+}
+
+void NvHTTP::setTrueUid(bool useTrueUid)
+{
+    m_UseTrueUid = useTrueUid;
 }
 
 NvAddress NvHTTP::address()
@@ -116,7 +125,7 @@ NvHTTP::getCurrentGame(QString serverInfo)
     // has the semantics that its name would indicate. To contain the effects of this change as much
     // as possible, we'll force the current game to zero if the server isn't in a streaming session.
     QString serverState = getXmlString(serverInfo, "state");
-    if (serverState != nullptr && serverState.endsWith("_SERVER_BUSY"))
+    if (serverState.endsWith("_SERVER_BUSY"))
     {
         return getXmlString(serverInfo, "currentgame").toInt();
     }
@@ -319,17 +328,19 @@ NvHTTP::getDisplayModeList(QString serverInfo)
     while (!xmlReader.atEnd()) {
         while (xmlReader.readNextStartElement()) {
             auto name = xmlReader.name();
-            if (name == QString("DisplayMode")) {
+            if (XML_NAME_EQUALS(name, "DisplayMode")) {
                 modes.append(NvDisplayMode());
             }
-            else if (name == QString("Width")) {
-                modes.last().width = xmlReader.readElementText().toInt();
-            }
-            else if (name == QString("Height")) {
-                modes.last().height = xmlReader.readElementText().toInt();
-            }
-            else if (name == QString("RefreshRate")) {
-                modes.last().refreshRate = xmlReader.readElementText().toInt();
+            else if (!modes.isEmpty()) {
+                if (XML_NAME_EQUALS(name, "Width")) {
+                    modes.last().width = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "Height")) {
+                    modes.last().height = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "RefreshRate")) {
+                    modes.last().refreshRate = xmlReader.readElementText().toInt();
+                }
             }
         }
     }
@@ -352,7 +363,7 @@ NvHTTP::getAppList()
     while (!xmlReader.atEnd()) {
         while (xmlReader.readNextStartElement()) {
             auto name = xmlReader.name();
-            if (name == QString("App")) {
+            if (XML_NAME_EQUALS(name, "App")) {
                 // We must have a valid app before advancing to the next one
                 if (!apps.isEmpty() && !apps.last().isInitialized()) {
                     qWarning() << "Invalid applist XML";
@@ -360,20 +371,31 @@ NvHTTP::getAppList()
                 }
                 apps.append(NvApp());
             }
-            else if (name == QString("AppTitle")) {
-                apps.last().name = xmlReader.readElementText();
-            }
-            else if (name == QString("ID")) {
-                apps.last().id = xmlReader.readElementText().toInt();
-            }
-            else if (name == QString("UUID")) {
-                apps.last().uuid = xmlReader.readElementText();
-            }
-            else if (name == QString("IsHdrSupported")) {
-                apps.last().hdrSupported = xmlReader.readElementText() == "1";
-            }
-            else if (name == QString("IsAppCollectorGame")) {
-                apps.last().isAppCollectorGame = xmlReader.readElementText() == "1";
+            else if (!apps.isEmpty()) {
+                if (XML_NAME_EQUALS(name, "AppTitle")) {
+                    // If an app has no name, Sunshine may send us <AppTitle/>,
+                    // which readElementText() returns as a null QString.
+                    // We want to treat this as an empty QString instead, so we
+                    // will explicitly convert it. An empty string will satisfy
+                    // NvApp's isInitialized() check.
+                    QString name = xmlReader.readElementText();
+                    if (name.isNull()) {
+                        name = "";
+                    }
+                    apps.last().name = name;
+                }
+                else if (XML_NAME_EQUALS(name, "ID")) {
+                    apps.last().id = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "UUID")) {
+                    apps.last().uuid = xmlReader.readElementText();
+                }
+                else if (XML_NAME_EQUALS(name, "IsHdrSupported")) {
+                    apps.last().hdrSupported = xmlReader.readElementText() == "1";
+                }
+                else if (XML_NAME_EQUALS(name, "IsAppCollectorGame")) {
+                    apps.last().isAppCollectorGame = xmlReader.readElementText() == "1";
+                }
             }
         }
     }
@@ -388,7 +410,7 @@ NvHTTP::verifyResponseStatus(QString xml)
 
     while (xmlReader.readNextStartElement())
     {
-        if (xmlReader.name() == QString("root"))
+        if (XML_NAME_EQUALS(xmlReader.name(), "root"))
         {
             // Status code can be 0xFFFFFFFF in some rare cases on GFE 3.20.3, and
             // QString::toInt() will fail in that case, so use QString::toUInt()
@@ -439,13 +461,7 @@ QByteArray
 NvHTTP::getXmlStringFromHex(QString xml,
                             QString tagName)
 {
-    QString str = getXmlString(xml, tagName);
-    if (str == nullptr)
-    {
-        return nullptr;
-    }
-
-    return QByteArray::fromHex(str.toLatin1());
+    return QByteArray::fromHex(getXmlString(xml, tagName).toUtf8());
 }
 
 QString
@@ -467,7 +483,7 @@ NvHTTP::getXmlString(QString xml,
         }
     }
 
-    return nullptr;
+    return QString();
 }
 
 QStringList
@@ -558,26 +574,10 @@ NvHTTP::openConnection(QUrl baseUrl,
     QUrl url(baseUrl);
     url.setPath("/" + command);
 
-    // Use a machine-specific UID to match Apollo server expectations
-    // Generate a uniqueid based on hostname + timestamp for uniqueness
-    static QString machineUniqueId;
-    if (machineUniqueId.isEmpty()) {
-        QString hostname = QSysInfo::machineHostName();
-        if (hostname.isEmpty()) hostname = "artemis";
-        // Take first 8 chars of hostname and pad with random hex
-        QString hostPart = hostname.left(8).toUpper();
-        while (hostPart.length() < 8) {
-            hostPart += QString("%1").arg(QRandomGenerator::global()->bounded(16), 1, 16).toUpper();
-        }
-        // Add 8 random hex chars
-        QString randomPart;
-        for (int i = 0; i < 8; i++) {
-            randomPart += QString("%1").arg(QRandomGenerator::global()->bounded(16), 1, 16).toUpper();
-        }
-        machineUniqueId = hostPart + randomPart;
-    }
-    url.setQuery("uniqueid=" + machineUniqueId + "&uuid=" +
-                 QUuid::createUuid().toString(QUuid::WithoutBraces) +
+    // Use a placeholder UID for GFE allow them to quit games for each other.
+    // Non-GFE hosts (including Apollo) get this client's persistent unique ID.
+    url.setQuery("uniqueid=" + (m_UseTrueUid ? IdentityManager::get()->getUniqueId() : "0123456789ABCDEF") +
+                 "&uuid=" + QUuid::createUuid().toString(QUuid::WithoutBraces) +
                  ((arguments != nullptr) ? ("&" + arguments) : ""));
 
     QNetworkRequest request(url);
@@ -590,23 +590,47 @@ NvHTTP::openConnection(QUrl baseUrl,
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 #endif
 
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) && QT_VERSION < QT_VERSION_CHECK(5, 15, 1) && !defined(QT_NO_BEARERMANAGEMENT)
-    // HACK: Set network accessibility to work around QTBUG-80947 (introduced in Qt 5.14.0 and fixed in Qt 5.15.1)
-    QT_WARNING_PUSH
-    QT_WARNING_DISABLE_DEPRECATED
-    m_Nam.setNetworkAccessible(QNetworkAccessManager::Accessible);
-    QT_WARNING_POP
+
+    // Use fine-grained idle timeouts to avoid calling QNetworkAccessManager::clearAccessCache(),
+    // which tears down the NAM's global thread each time. We must not keep persistent connections
+    // or GFE will puke.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+    request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, -1);
+#elif QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+    request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, 0);
 #endif
 
-    QNetworkReply* reply = m_Nam.get(request);
-
-    // Run the request with a timeout if requested
+    auto sslErrorsConnection = connect(m_Nam, &QNetworkAccessManager::sslErrors, this, &NvHTTP::handleSslErrors);
+    QNetworkReply* reply = m_Nam->get(request);
     QEventLoop loop;
+
+    // Connect the quit signals
     connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, &loop, &QEventLoop::quit);
+
+    // Enforce a transfer timeout if requested
     if (timeoutMs) {
         QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
     }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+    // Time the request to distinguish a slow response from an unreachable host
+    auto* connectTimer = new QTimer(reply);
+    connectTimer->setSingleShot(true);
+    connect(connectTimer, &QTimer::timeout, reply, [reply, logLevel, url]() {
+        if (!reply->isFinished()) {
+            if (logLevel >= NvLogLevel::NVLL_ERROR) {
+                qWarning() << "Aborting timed out connection for" << url.toString();
+            }
+
+            reply->setProperty("timeout_reason", "connection_timeout");
+            reply->abort();
+        }
+    });
+    connect(reply, &QNetworkReply::requestSent, connectTimer, &QTimer::stop);
+    connectTimer->start(REQUEST_TIMEOUT_MS);
+#endif
+
     if (logLevel >= NvLogLevel::NVLL_VERBOSE) {
         qInfo() << "Executing request:" << url.toString();
     }
@@ -621,9 +645,11 @@ NvHTTP::openConnection(QUrl baseUrl,
         reply->abort();
     }
 
-    // We must clear out cached authentication and connections or
-    // GFE will puke next time
-    m_Nam.clearAccessCache();
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
+    // If we couldn't use fine-grained connection idle timeouts, kill them all now
+    m_Nam->clearAccessCache();
+#endif
+    disconnect(sslErrorsConnection);
 
     // Handle error
     if (reply->error() != QNetworkReply::NoError)
@@ -640,7 +666,11 @@ NvHTTP::openConnection(QUrl baseUrl,
             throw exception;
         }
         else if (reply->error() == QNetworkReply::OperationCanceledError) {
-            QtNetworkReplyException exception(QNetworkReply::TimeoutError, "Request timed out");
+            QString reason = reply->property("timeout_reason").toString();
+            QtNetworkReplyException exception(QNetworkReply::TimeoutError,
+                                              reason == "connection_timeout" ?
+                                                  "Connection timed out" :
+                                                  "Request timed out");
             delete reply;
             throw exception;
         }
@@ -650,6 +680,12 @@ NvHTTP::openConnection(QUrl baseUrl,
             throw exception;
         }
     }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+    // The requestSent signal must have stopped the timer for any successful request,
+    // otherwise we could falsely time out a slow response when we connected fine.
+    Q_ASSERT(!connectTimer->isActive());
+#endif
 
     return reply;
 }
@@ -696,7 +732,7 @@ NvHTTP::sendClipboardContent(const QString& content)
 #endif
 
         // Send POST request with clipboard content
-        QNetworkReply* reply = m_Nam.post(request, content.toUtf8());
+        QNetworkReply* reply = m_Nam->post(request, content.toUtf8());
 
         // Wait for response with timeout
         QEventLoop loop;
