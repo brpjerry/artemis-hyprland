@@ -118,13 +118,16 @@ public:
     Q_INVOKABLE bool sendClipboard(bool force = true);
     Q_INVOKABLE bool getClipboard();
 
-    // SDL thread: called from the stream's SDL event loop. Each of these first
-    // processes stored work (HTTP results, manual requests).
-    void processPendingWork(); // SDL_CODE_CLIPBOARD_WAKE, focus gained
-    // Called when the SDL loop is idle: picks up work whose wakeup event
+    // SDL thread: called from the stream's SDL event loop. They process stored
+    // work (HTTP results, manual requests). With sync enabled, a clipboard
+    // update and focus gain read the local offer first, so a fetch that
+    // completed meanwhile is superseded instead of overwriting a newer copy.
+    void processPendingWork(bool uploadCurrentOffer = false); // SDL_CODE_CLIPBOARD_WAKE
+    // Called on every SDL loop iteration: picks up work whose wakeup event
     // couldn't be posted (SDL's event queue was full). Cheap when there is none.
     void processStrandedWork();
     void onStreamClipboardUpdated(); // SDL_CLIPBOARDUPDATE
+    void onStreamFocusGained(); // SDL_WINDOWEVENT_FOCUS_GAINED
     void onStreamFocusLost(); // SDL_WINDOWEVENT_FOCUS_LOST
 
 signals:

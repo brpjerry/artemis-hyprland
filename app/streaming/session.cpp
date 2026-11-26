@@ -2191,6 +2191,9 @@ void Session::exec()
             continue;
         }
 #endif
+        // Per-frame events can keep the loop from ever idling, so check here too
+        m_ClipboardManager->processStrandedWork();
+
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2258,8 +2261,7 @@ void Session::exec()
                 }
                 m_InputHandler->notifyFocusGained();
 
-                // Pick up clipboard work whose wakeup event was lost
-                m_ClipboardManager->processPendingWork();
+                m_ClipboardManager->onStreamFocusGained();
                 break;
             case SDL_WINDOWEVENT_LEAVE:
                 m_InputHandler->notifyMouseLeave();
