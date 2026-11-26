@@ -731,6 +731,18 @@ NvHTTP::sendClipboardContent(const QString& content)
         request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 #endif
 
+        // Same connection handling as openConnection()
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+        request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, -1);
+#elif QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+        request.setAttribute(QNetworkRequest::ConnectionCacheExpiryTimeoutSecondsAttribute, 0);
+#endif
+
+        // Accept the host's pinned self-signed certificate. NvHTTP connects
+        // this handler per request (see openConnection()); without it the
+        // TLS handshake fails on the certificate's host name.
+        auto sslErrorsConnection = connect(m_Nam, &QNetworkAccessManager::sslErrors, this, &NvHTTP::handleSslErrors);
+
         // Send POST request with clipboard content
         QNetworkReply* reply = m_Nam->post(request, content.toUtf8());
 
@@ -742,6 +754,11 @@ NvHTTP::sendClipboardContent(const QString& content)
         
         qDebug() << "NvHTTP: Sending clipboard content to server:" << url.toString();
         loop.exec(QEventLoop::ExcludeUserInputEvents);
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
+        m_Nam->clearAccessCache();
+#endif
+        disconnect(sslErrorsConnection);
 
         // Check for timeout
         if (!reply->isFinished()) {
