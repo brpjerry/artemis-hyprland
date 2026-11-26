@@ -260,6 +260,7 @@ void PairCommandLineParser::parse(const QStringList &args)
     parser.addPositionalArgument("pair", "pair host");
     parser.addPositionalArgument("host", "Host computer name, UUID, or IP address", "<host>");
     parser.addValueOption("pin", "4 digit pairing PIN");
+    parser.addValueOption("passphrase", "Apollo OTP passphrase. Pairs with the OTP given as --pin");
 
     if (!parser.parse(args)) {
         parser.showError(parser.errorText());
@@ -281,6 +282,10 @@ void PairCommandLineParser::parse(const QStringList &args)
     if (!m_PredefinedPin.isEmpty() && !QRegularExpression("^\\d{4}$").match(m_PredefinedPin).hasMatch()) {
         parser.showError("PIN must be 4 digits");
     }
+    m_OtpPassphrase = parser.value("passphrase");
+    if (!m_OtpPassphrase.isEmpty() && m_PredefinedPin.isEmpty()) {
+        parser.showError("--passphrase needs the OTP from the Apollo server as --pin");
+    }
 }
 
 QString PairCommandLineParser::getHost() const
@@ -291,6 +296,11 @@ QString PairCommandLineParser::getHost() const
 QString PairCommandLineParser::getPredefinedPin() const
 {
     return m_PredefinedPin;
+}
+
+QString PairCommandLineParser::getOtpPassphrase() const
+{
+    return m_OtpPassphrase;
 }
 
 StreamCommandLineParser::StreamCommandLineParser()

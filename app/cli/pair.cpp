@@ -84,8 +84,15 @@ public:
                     Q_ASSERT(!m_PredefinedPin.isEmpty());
 
                     m_State = StatePairing;
-                    m_ComputerManager->pairHost(event.computer, m_PredefinedPin);
-                    emit q->pairing(event.computer->name, m_PredefinedPin);
+                    if (!m_OtpPassphrase.isEmpty()) {
+                        m_ComputerManager->pairHostWithOTP(event.computer, m_PredefinedPin, m_OtpPassphrase);
+                        // Nothing to enter on the host
+                        emit q->pairing(event.computer->name, QString());
+                    }
+                    else {
+                        m_ComputerManager->pairHost(event.computer, m_PredefinedPin);
+                        emit q->pairing(event.computer->name, m_PredefinedPin);
+                    }
                 }
             }
             break;
@@ -115,6 +122,7 @@ public:
     Launcher *q_ptr;
     QString m_ComputerName;
     QString m_PredefinedPin;
+    QString m_OtpPassphrase;
     ComputerManager *m_ComputerManager;
     ComputerSeeker *m_ComputerSeeker;
     NvComputer *m_Computer;
@@ -122,13 +130,14 @@ public:
     QTimer *m_TimeoutTimer;
 };
 
-Launcher::Launcher(QString computer, QString predefinedPin, QObject *parent)
+Launcher::Launcher(QString computer, QString predefinedPin, QString otpPassphrase, QObject *parent)
     : QObject(parent),
       m_DPtr(new LauncherPrivate(this))
 {
     Q_D(Launcher);
     d->m_ComputerName = computer;
     d->m_PredefinedPin = predefinedPin;
+    d->m_OtpPassphrase = otpPassphrase;
     d->m_State = StateInit;
     d->m_TimeoutTimer = new QTimer(this);
     d->m_TimeoutTimer->setSingleShot(true);

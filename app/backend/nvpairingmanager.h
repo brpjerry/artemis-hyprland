@@ -14,17 +14,33 @@ public:
         PAIRED,
         PIN_WRONG,
         FAILED,
-        ALREADY_IN_PROGRESS
+        ALREADY_IN_PROGRESS,
+        // Apollo OTP pairing: the host has no OTP, or it expired
+        OTP_UNAVAILABLE
+    };
+
+    // Apollo's one-time PIN pairing. The host checks otpauth, a hash of the
+    // OTP, the salt and the passphrase, on the first request instead of
+    // waiting for a PIN to be entered. The rest is the PIN handshake with the
+    // OTP as the PIN, so the host's proof is verified the same way.
+    struct OtpAuth
+    {
+        QString passphrase;
+        QString deviceName;
     };
 
     explicit NvPairingManager(NvComputer* computer);
 
     ~NvPairingManager();
 
+    // Sets serverCert only when pairing succeeds
     PairState
-    pair(QString appVersion, QString pin, QSslCertificate& serverCert);
+    pair(QString appVersion, QString pin, QSslCertificate& serverCert, const OtpAuth* otp = nullptr);
 
 private:
+    void
+    cancelPairing(bool apolloOtp);
+
     QByteArray
     generateRandomBytes(int length);
 

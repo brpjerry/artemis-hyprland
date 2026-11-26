@@ -3,6 +3,9 @@
 
 #include <stdexcept>
 
+#include <QUrl>
+#include <QXmlStreamReader>
+
 #include <openssl/bio.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
@@ -234,9 +237,48 @@ NvPairingManager::saltPin(const QByteArray& salt, QString pin)
     return QByteArray().append(salt).append(pin.toUtf8());
 }
 
-NvPairingManager::PairState
-NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverCert)
+// Apollo reports an unusable OTP in the root's status_message, with status 200
+static QString
+getRootStatusMessage(const QString& xml)
 {
+    QXmlStreamReader xmlReader(xml);
+    while (xmlReader.readNextStartElement()) {
+        if (xmlReader.name() == QLatin1String("root")) {
+            return xmlReader.attributes().value("status_message").toString();
+        }
+    }
+    return QString();
+}
+
+// Ends a failed attempt on the host. GFE drops it on unpair. Apollo has no
+// unpair endpoint (the 404 would throw), and it keeps the attempt's session
+// until a pairing request arrives out of order: the next getservercert would
+// fail and use up its OTP. An empty clientpairingsecret is out of order or too
+// short in every phase, so Apollo drops the session.
+void
+NvPairingManager::cancelPairing(bool apolloOtp)
+{
+    if (!apolloOtp) {
+        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        return;
+    }
+
+    try {
+        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
+                                      "pair",
+                                      "devicename=roth&updateState=1&clientpairingsecret=",
+                                      REQUEST_TIMEOUT_MS);
+    } catch (const GfeHttpResponseException&) {
+        // Best effort: the attempt has already failed
+    } catch (const QtNetworkReplyException&) {
+    }
+}
+
+NvPairingManager::PairState
+NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverCert, const OtpAuth* otp)
+{
+    const bool apolloOtp = (otp != nullptr);
+
     int serverMajorVersion = NvHTTP::parseQuad(appVersion).value(0);
     qInfo() << "Pairing with server generation:" << serverMajorVersion;
 
@@ -261,12 +303,36 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     QByteArray aesKey = QCryptographicHash::hash(saltedPin, hashAlgo);
     aesKey.truncate(16);
 
-    QString getCert = m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
-                                                    "pair",
-                                                    "devicename=roth&updateState=1&phrase=getservercert&salt=" +
-                                                    salt.toHex() + "&clientcert=" + IdentityManager::get()->getCertificate().toHex(),
-                                                    0);
+    QString getCert;
+    if (apolloOtp) {
+        // Apollo answers at once, with the OTP's key if otpauth matches and a
+        // random key that fails the PIN check below if it doesn't. Don't log
+        // the URL: with the salt, otpauth allows an offline search for the
+        // OTP and passphrase.
+        QString otpAuth = QCryptographicHash::hash((pin + salt.toHex() + otp->passphrase).toUtf8(),
+                                                   QCryptographicHash::Sha256).toHex().toUpper();
+        getCert = m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
+                                                "pair",
+                                                "devicename=" + QString::fromLatin1(QUrl::toPercentEncoding(otp->deviceName)) +
+                                                "&updateState=1&phrase=getservercert&salt=" + salt.toHex() +
+                                                "&clientcert=" + IdentityManager::get()->getCertificate().toHex() +
+                                                "&otpauth=" + otpAuth,
+                                                REQUEST_TIMEOUT_MS,
+                                                NvHTTP::NvLogLevel::NVLL_NONE);
+    }
+    else {
+        getCert = m_Http.openConnectionToString(m_Http.m_BaseUrlHttp,
+                                                "pair",
+                                                "devicename=roth&updateState=1&phrase=getservercert&salt=" +
+                                                salt.toHex() + "&clientcert=" + IdentityManager::get()->getCertificate().toHex(),
+                                                0);
+    }
     NvHTTP::verifyResponseStatus(getCert);
+    if (apolloOtp && getRootStatusMessage(getCert) == "OTP auth not available.") {
+        qCritical() << "No OTP available on the host";
+        cancelPairing(apolloOtp);
+        return PairState::OTP_UNAVAILABLE;
+    }
     if (NvHTTP::getXmlString(getCert, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #1";
@@ -276,7 +342,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     QByteArray serverCertStr = NvHTTP::getXmlStringFromHex(getCert, "plaincert");
     if (serverCertStr.isEmpty()) {
         qCritical() << "Server likely already pairing";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::ALREADY_IN_PROGRESS;
     }
 
@@ -285,7 +351,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
         Q_ASSERT(!unverifiedServerCert.isNull());
 
         qCritical() << "Failed to parse plaincert";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
@@ -304,14 +370,14 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (NvHTTP::getXmlString(challengeXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #2";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
     QByteArray challengeResponseData = decrypt(m_Http.getXmlStringFromHex(challengeXml, "challengeresponse"), aesKey);
     if (challengeResponseData.size() < hashLength + 16) {
         qCritical() << "Invalid challengeresponse at stage #2";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
@@ -335,14 +401,14 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (NvHTTP::getXmlString(respXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #3";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
     QByteArray pairingSecret = NvHTTP::getXmlStringFromHex(respXml, "pairingsecret");
     if (pairingSecret.size() <= 16) {
         qCritical() << "Invalid pairingsecret at stage #3";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
@@ -354,7 +420,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
                          serverCertStr))
     {
         qCritical() << "MITM detected";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
@@ -365,7 +431,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (QCryptographicHash::hash(expectedResponseData, hashAlgo) != serverResponse)
     {
         qCritical() << "Incorrect PIN";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::PIN_WRONG;
     }
 
@@ -382,7 +448,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (NvHTTP::getXmlString(secretRespXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #4";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
@@ -394,7 +460,7 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
     if (NvHTTP::getXmlString(pairChallengeXml, "paired") != "1")
     {
         qCritical() << "Failed pairing at stage #5";
-        m_Http.openConnectionToString(m_Http.m_BaseUrlHttp, "unpair", nullptr, REQUEST_TIMEOUT_MS);
+        cancelPairing(apolloOtp);
         return PairState::FAILED;
     }
 
