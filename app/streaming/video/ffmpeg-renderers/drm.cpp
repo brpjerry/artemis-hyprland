@@ -1486,7 +1486,7 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
                     (y * m_OverlayCompositionSurface->pitch);
                 auto bpp = m_OverlayCompositionSurface->format->BytesPerPixel;
 
-                if (y < overlayRect->y || y > overlayRect->y + overlayRect->h) {
+                if (y < overlayRect->y || y >= overlayRect->y + overlayRect->h) {
                     // Clear the whole row if the overlay doesn't intersect this row
                     memset(dstPixelRow + (overlayUnionRect.x * bpp),
                            0,
@@ -1507,10 +1507,11 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
                            overlayRect->w * bpp);
 
                     // Clear columns after the intersection
-                    SDL_assert(overlayUnionRect.w >= overlayRect->w);
-                    memset(dstPixelRow + ((overlayRect->x + overlayRect->w) * bpp),
+                    int overlayRight = overlayRect->x + overlayRect->w;
+                    SDL_assert(overlayUnionRect.x + overlayUnionRect.w >= overlayRight);
+                    memset(dstPixelRow + (overlayRight * bpp),
                            0,
-                           (overlayUnionRect.w - overlayRect->w) * bpp);
+                           (overlayUnionRect.x + overlayUnionRect.w - overlayRight) * bpp);
                 }
             }
         }
