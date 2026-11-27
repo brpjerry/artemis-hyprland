@@ -11,7 +11,7 @@ namespace Overlay {
 enum OverlayType {
     OverlayDebug,
     OverlayStatusUpdate,
-    OverlayServerCommands,
+    OverlayQuickMenu, // Artemis: centered, see setOverlayFitArea()
     OverlayMax
 };
 
@@ -41,9 +41,17 @@ public:
 
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
+    // Artemis: draws this overlay's text on a backdrop panel, line by line and
+    // without wrapping, at the largest font size up to maxFontSize that keeps
+    // the panel within maxWidth x maxHeight pixels. A line starting with '>'
+    // is highlighted. Call it on the thread that updates the overlay's text.
+    void setOverlayFitArea(OverlayType type, int maxWidth, int maxHeight, int maxFontSize);
+
 private:
     void notifyOverlayUpdated(OverlayType type);
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
+    bool openOverlayFont(OverlayType type, int fontSize);
+    SDL_Surface* renderTextPanel(OverlayType type);
 
     struct {
         bool enabled;
@@ -53,6 +61,13 @@ private:
 
         TTF_Font* font;
         SDL_Surface* surface;
+
+        // setOverlayFitArea(); unused while fitWidth is 0
+        int fitWidth;
+        int fitHeight;
+        int maxFontSize;
+        int fittedLines; // Text shape fontSize was last fitted for
+        int fittedColumns;
     } m_Overlays[OverlayMax];
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;

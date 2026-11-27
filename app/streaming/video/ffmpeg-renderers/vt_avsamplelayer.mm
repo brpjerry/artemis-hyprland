@@ -430,6 +430,23 @@ public:
         // Update text contents
         [m_OverlayTextFields[type] setStringValue: [NSString stringWithUTF8String:Session::get()->getOverlayManager().getOverlayText(type)]];
 
+        // Artemis: the quick menu is laid out in columns. Its font size is
+        // fitted to the window in pixels, so convert that to points, and
+        // center the field on its text.
+        if (type == Overlay::OverlayQuickMenu) {
+            CGFloat scale = m_StreamView.window != nil ? m_StreamView.window.backingScaleFactor : 1.0;
+            [m_OverlayTextFields[type] setFont:[NSFont userFixedPitchFontOfSize:Session::get()->getOverlayManager().getOverlayFontSize(type) / scale]];
+            [m_OverlayTextFields[type] setDrawsBackground:YES];
+            [m_OverlayTextFields[type] setBackgroundColor:[NSColor colorWithSRGBRed:0.0 green:0.0 blue:0.0 alpha:0.78]];
+            [m_OverlayTextFields[type] sizeToFit];
+
+            NSRect bounds = m_StreamView.bounds;
+            NSRect frame = m_OverlayTextFields[type].frame;
+            frame.origin.x = MAX(0, (bounds.size.width - frame.size.width) / 2);
+            frame.origin.y = MAX(0, (bounds.size.height - frame.size.height) / 2);
+            [m_OverlayTextFields[type] setFrame:frame];
+        }
+
         // Unhide if it's enabled
         [m_OverlayTextFields[type] setHidden: !Session::get()->getOverlayManager().isOverlayEnabled(type)];
     }}

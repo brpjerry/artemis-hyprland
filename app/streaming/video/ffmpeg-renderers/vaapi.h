@@ -119,8 +119,6 @@ private:
 
     SDL_Window* m_Window;
     int m_VideoFormat;
-    int m_DisplayWidth;
-    int m_DisplayHeight;
 
 #ifdef HAVE_EGL
     enum class EglExportType {

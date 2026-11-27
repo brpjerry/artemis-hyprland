@@ -252,9 +252,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
 
     m_Window = params->window;
     m_VideoFormat = params->videoFormat;
-    
-    // Get display dimensions for overlay positioning
-    SDL_GetWindowSize(m_Window, &m_DisplayWidth, &m_DisplayHeight);
 
     m_HwContext = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VAAPI);
     if (!m_HwContext) {
@@ -774,11 +771,12 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             overlayRect.x = 0;
             overlayRect.y = 0;
         }
-        else if (type == Overlay::OverlayServerCommands) {
-            // Center
-            overlayRect.x = (m_DisplayWidth - newSurface->w) / 2;
-            overlayRect.y = (m_DisplayHeight - newSurface->h) / 2;
-        } else {
+        else if (type == Overlay::OverlayQuickMenu) {
+            // Centered in renderFrame(), which knows the current window size
+            overlayRect.x = 0;
+            overlayRect.y = 0;
+        }
+        else {
             SDL_assert(false);
         }
 
@@ -872,6 +870,12 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
             }
             if (overlayRect.y < 0) {
                 overlayRect.y += windowHeight;
+            }
+
+            // Artemis: the quick menu is centered
+            if (type == Overlay::OverlayQuickMenu) {
+                overlayRect.x = SDL_max(0, (windowWidth - overlayRect.w) / 2);
+                overlayRect.y = SDL_max(0, (windowHeight - overlayRect.h) / 2);
             }
 
             status = vaAssociateSubpicture(vaDeviceContext->display,
