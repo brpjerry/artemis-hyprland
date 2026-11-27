@@ -123,12 +123,42 @@ void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
 
 bool OverlayManager::canShowOverlay(OverlayType type)
 {
-    if (m_FontData.isEmpty() || TTF_WasInit() == 0) {
+    if (!isFontUsable()) {
         return false;
     }
 
     QReadLocker lock(&m_OverlayRendererLock);
     return m_Renderer != nullptr && m_Renderer->canShowOverlay(type);
+}
+
+bool OverlayManager::isFontUsable()
+{
+    // The font data doesn't change, so check it once: it has to open and
+    // render text, which a damaged file can fail even when it isn't empty
+    if (m_FontUsable < 0) {
+        TTF_Font* font = nullptr;
+        SDL_Surface* text = nullptr;
+        if (!m_FontData.isEmpty() && TTF_WasInit() != 0) {
+            font = TTF_OpenFontRW(SDL_RWFromConstMem(m_FontData.constData(), m_FontData.size()), 1, 16);
+        }
+        if (font != nullptr) {
+            text = TTF_RenderUTF8_Blended(font, "Quick Menu", { 0xFF, 0xFF, 0xFF, 0xFF });
+        }
+
+        m_FontUsable = text != nullptr ? 1 : 0;
+        if (!m_FontUsable) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "The overlay font can't be used: %s",
+                        TTF_GetError());
+        }
+
+        SDL_FreeSurface(text);
+        if (font != nullptr) {
+            TTF_CloseFont(font);
+        }
+    }
+
+    return m_FontUsable == 1;
 }
 
 void OverlayManager::notifyOverlayUpdated(OverlayType type)

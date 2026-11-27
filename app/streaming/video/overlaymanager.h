@@ -61,6 +61,7 @@ private:
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
     bool openOverlayFont(OverlayType type, int fontSize);
     SDL_Surface* renderTextPanel(OverlayType type);
+    bool isFontUsable();
 
     struct {
         bool enabled;
@@ -80,6 +81,7 @@ private:
     } m_Overlays[OverlayMax];
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;
+    int m_FontUsable = -1; // Artemis: isFontUsable(), -1 until checked
     QReadWriteLock m_OverlayRendererLock;
 };
 
