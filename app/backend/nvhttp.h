@@ -98,6 +98,18 @@ private:
     QByteArray m_ErrorText;
 };
 
+// Thrown when NvHTTP sees that a response body exceeds the caller's limit. It
+// abandons the transfer then (hence OperationCanceledError).
+class ResponseTooLargeException : public QtNetworkReplyException
+{
+public:
+    explicit ResponseTooLargeException(qint64 limit) :
+        QtNetworkReplyException(QNetworkReply::OperationCanceledError,
+                                QString("Response exceeds the %1-byte limit").arg(limit))
+    {
+    }
+};
+
 class NvHTTP : public QObject
 {
     Q_OBJECT
@@ -139,12 +151,15 @@ public:
     getXmlStringFromHex(QString xml,
                         QString tagName);
 
+    // A non-negative maxBytes limits the response body: a larger one throws
+    // ResponseTooLargeException
     QString
     openConnectionToString(QUrl baseUrl,
                            QString command,
                            QString arguments,
                            int timeoutMs,
-                           NvLogLevel logLevel = NvLogLevel::NVLL_VERBOSE);
+                           NvLogLevel logLevel = NvLogLevel::NVLL_VERBOSE,
+                           qint64 maxBytes = -1);
 
     void setServerCert(QSslCertificate serverCert);
     void setAddress(NvAddress address);
@@ -185,8 +200,12 @@ public:
     getBoxArt(int appId);
 
     // Artemis clipboard sync endpoints (Apollo servers only)
+
+    // Returns the host's text clipboard. Like the other requests, it throws
+    // on failure: ResponseTooLargeException if the text is over maxBytes
+    // bytes, GfeHttpResponseException or QtNetworkReplyException otherwise.
     QString
-    getClipboardContent();
+    getClipboardContent(qint64 maxBytes);
 
     bool
     sendClipboardContent(const QString& content);
@@ -203,12 +222,17 @@ private:
     void
     handleSslErrors(QNetworkReply* reply, const QList<QSslError>& errors);
 
+    // With a boundedBody, the response body is read into it as it arrives,
+    // up to maxBytes: a larger body throws ResponseTooLargeException. The
+    // returned reply then holds no data.
     QNetworkReply*
     openConnection(QUrl baseUrl,
                    QString command,
                    QString arguments,
                    int timeoutMs,
-                   NvLogLevel logLevel);
+                   NvLogLevel logLevel,
+                   QByteArray* boundedBody = nullptr,
+                   qint64 maxBytes = 0);
 
     NvAddress m_Address;
     QNetworkAccessManager* m_Nam;

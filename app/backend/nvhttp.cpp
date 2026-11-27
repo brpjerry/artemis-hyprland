@@ -5,6 +5,7 @@
 #include "settings/streamingpreferences.h"
 #include <Limelight.h>
 
+#include <QBuffer>
 #include <QDebug>
 #include <QUuid>
 #include <QtNetwork/QNetworkReply>
@@ -22,6 +23,9 @@
 #define LAUNCH_TIMEOUT_MS 120000
 #define RESUME_TIMEOUT_MS 30000
 #define QUIT_TIMEOUT_MS 30000
+
+// Read buffer for a size-limited response body (see openConnection())
+#define BOUNDED_READ_BUFFER_SIZE (64 * 1024)
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #define XML_NAME_EQUALS(x, y) ((x) == (y))
@@ -535,12 +539,23 @@ NvHTTP::openConnectionToString(QUrl baseUrl,
                                QString command,
                                QString arguments,
                                int timeoutMs,
-                               NvLogLevel logLevel)
+                               NvLogLevel logLevel,
+                               qint64 maxBytes)
 {
-    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel);
+    QByteArray boundedBody;
+    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel,
+                                          maxBytes >= 0 ? &boundedBody : nullptr, maxBytes);
     QString ret;
 
-    QTextStream stream(reply);
+    // A bounded body has already been read out of the reply
+    QBuffer boundedBuffer(&boundedBody);
+    QIODevice* source = reply;
+    if (maxBytes >= 0) {
+        boundedBuffer.open(QIODevice::ReadOnly);
+        source = &boundedBuffer;
+    }
+
+    QTextStream stream(source);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     stream.setEncoding(QStringConverter::Utf8);
@@ -559,7 +574,9 @@ NvHTTP::openConnection(QUrl baseUrl,
                        QString command,
                        QString arguments,
                        int timeoutMs,
-                       NvLogLevel logLevel)
+                       NvLogLevel logLevel,
+                       QByteArray* boundedBody,
+                       qint64 maxBytes)
 {
     // Suppress debug output for polling requests to reduce log noise
     bool suppressDebugOutput = (logLevel == NvLogLevel::NVLL_NONE);
@@ -603,6 +620,40 @@ NvHTTP::openConnection(QUrl baseUrl,
     auto sslErrorsConnection = connect(m_Nam, &QNetworkAccessManager::sslErrors, this, &NvHTTP::handleSslErrors);
     QNetworkReply* reply = m_Nam->get(request);
     QEventLoop loop;
+
+    // Read a bounded body out of the reply as it arrives: at most maxBytes
+    // are appended to boundedBody, and the transfer is abandoned as soon as
+    // more than that is seen, with or without a Content-Length (chunked or
+    // close-delimited bodies too). Qt may already hold the chunk that crosses
+    // the limit when that happens. The small read buffer keeps Qt from
+    // reading far ahead, and draining each accepted chunk is what lets it
+    // read on. (Left in the reply, a body can stall short of the read buffer
+    // size, so a limit set there might never see the first excess byte.)
+    bool tooLarge = false;
+    auto readBoundedBody = [reply, boundedBody, maxBytes, &tooLarge]() {
+        // A declared length can rule the body out as soon as the headers
+        // arrive. Qt removes Content-Length when it decompresses a body.
+        bool lengthKnown = false;
+        qint64 contentLength = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong(&lengthKnown);
+        if ((lengthKnown && contentLength > maxBytes) ||
+                boundedBody->size() + reply->bytesAvailable() > maxBytes) {
+            tooLarge = true;
+
+            // Closes the connection and emits finished() right away, which
+            // ends the loop below (a no-op once the reply has finished). The
+            // reply's error is then OperationCanceledError, reported as
+            // ResponseTooLargeException.
+            reply->abort();
+            return;
+        }
+
+        boundedBody->append(reply->readAll());
+    };
+    if (boundedBody) {
+        reply->setReadBufferSize(BOUNDED_READ_BUFFER_SIZE);
+        connect(reply, &QNetworkReply::metaDataChanged, &loop, readBoundedBody);
+        connect(reply, &QIODevice::readyRead, &loop, readBoundedBody);
+    }
 
     // Connect the quit signals
     connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
@@ -651,6 +702,38 @@ NvHTTP::openConnection(QUrl baseUrl,
 #endif
     disconnect(sslErrorsConnection);
 
+    // Take anything that finished() arrived without a readyRead() for.
+    // Normally a no-op.
+    if (boundedBody && !tooLarge && reply->error() == QNetworkReply::NoError) {
+        readBoundedBody();
+    }
+
+    // Report an oversized body before the generic error handling below, which
+    // would take the cancellation for a timeout
+    if (tooLarge) {
+        // An HTTP error with a large body is still an HTTP error, not
+        // oversized content
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (httpStatus >= 400) {
+            if (logLevel >= NvLogLevel::NVLL_ERROR) {
+                qWarning() << command << "request failed with HTTP status" << httpStatus;
+            }
+
+            GfeHttpResponseException exception(httpStatus,
+                                               reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString());
+            delete reply;
+            throw exception;
+        }
+
+        if (logLevel >= NvLogLevel::NVLL_ERROR) {
+            qWarning() << command << "response exceeds the" << maxBytes << "byte limit, abandoned it";
+        }
+
+        ResponseTooLargeException exception(maxBytes);
+        delete reply;
+        throw exception;
+    }
+
     // Handle error
     if (reply->error() != QNetworkReply::NoError)
     {
@@ -692,26 +775,19 @@ NvHTTP::openConnection(QUrl baseUrl,
 
 // Artemis clipboard sync methods (Apollo servers only)
 QString
-NvHTTP::getClipboardContent()
+NvHTTP::getClipboardContent(qint64 maxBytes)
 {
-    try {
-        QString response = openConnectionToString(m_BaseUrlHttps,
-                                                  "actions/clipboard",
-                                                  "type=text",
-                                                  REQUEST_TIMEOUT_MS,
-                                                  NvLogLevel::NVLL_VERBOSE);
-        
-        qDebug() << "NvHTTP: Retrieved clipboard content from server";
-        return response;
-    }
-    catch (const GfeHttpResponseException& e) {
-        qWarning() << "NvHTTP: Failed to get clipboard content:" << e.getStatusMessage();
-        return QString();
-    }
-    catch (const QtNetworkReplyException& e) {
-        qWarning() << "NvHTTP: Network error getting clipboard:" << e.getErrorText();
-        return QString();
-    }
+    // The body is the clipboard text in UTF-8, so the limit applies to its
+    // UTF-8 size
+    QString response = openConnectionToString(m_BaseUrlHttps,
+                                              "actions/clipboard",
+                                              "type=text",
+                                              REQUEST_TIMEOUT_MS,
+                                              NvLogLevel::NVLL_VERBOSE,
+                                              maxBytes);
+
+    qDebug() << "NvHTTP: Retrieved clipboard content from server";
+    return response;
 }
 
 bool
