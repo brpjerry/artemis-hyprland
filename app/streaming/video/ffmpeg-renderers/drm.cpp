@@ -1385,13 +1385,6 @@ void DrmRenderer::enterOverlayCompositionMode()
         return;
     }
 
-    // Turn off all existing overlay planes
-    for (auto &overlay : m_OverlayPlanes) {
-        if (overlay.isValid()) {
-            m_PropSetter.disablePlane(overlay);
-        }
-    }
-
     struct drm_mode_create_dumb createBuf = {};
     uint32_t fbId;
     void* mapping = nullptr;
@@ -1413,6 +1406,15 @@ void DrmRenderer::enterOverlayCompositionMode()
 
     if (!createFbForDumbBuffer(&createBuf, &fbId)) {
         goto Fail;
+    }
+
+    // Turn off all existing overlay planes
+    // Artemis: only now that the composition buffer is ready, so a failed
+    // setup leaves the planes as their cached rects describe them
+    for (auto &overlay : m_OverlayPlanes) {
+        if (overlay.isValid()) {
+            m_PropSetter.disablePlane(overlay);
+        }
     }
 
     // Configure the overlay plane to cover the entire display
@@ -1481,13 +1483,12 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
             SDL_zerop(overlayRect);
             return;
         }
-        if (!SDL_RectEquals(&clippedUnionRect, &overlayUnionRect)) {
-            SDL_FillRect(m_OverlayCompositionSurface, &m_OverlayRects[type], 0);
-            SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
-            overlayUnionRect = clippedUnionRect;
-        }
         // If the new overlay completely covers the old overlay, blit it all at once
-        else if (SDL_RectEquals(&overlayUnionRect, overlayRect)) {
+        if (SDL_RectEquals(&overlayUnionRect, overlayRect)) {
+            SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
+        }
+        else if (!SDL_RectEquals(&clippedUnionRect, &overlayUnionRect)) {
+            SDL_FillRect(m_OverlayCompositionSurface, &m_OverlayRects[type], 0);
             SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
         }
         else {
@@ -1532,7 +1533,7 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
         }
 
         // Dirty the modified portion of the plane
-        m_PropSetter.damagePlane(m_OverlayPlanes[0], overlayUnionRect);
+        m_PropSetter.damagePlane(m_OverlayPlanes[0], clippedUnionRect);
     }
     else {
         // Clear the pixels where this overlay was drawn before
