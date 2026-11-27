@@ -351,7 +351,29 @@ bool OverlayManager::openOverlayFont(OverlayType type, int fontSize)
     return true;
 }
 
+bool OverlayManager::takeOverlayPanelFailure(OverlayType type)
+{
+    const bool failed = m_Overlays[type].panelFailed;
+    m_Overlays[type].panelFailed = false;
+    return failed;
+}
+
 SDL_Surface* OverlayManager::renderTextPanel(OverlayType type)
+{
+    SDL_Surface* panel = drawTextPanel(type);
+
+    // Empty text draws nothing, and that's no failure
+    m_Overlays[type].panelFailed = panel == nullptr && m_Overlays[type].text[0] != 0;
+    if (m_Overlays[type].panelFailed) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Couldn't draw overlay %d: %s",
+                    type,
+                    SDL_GetError());
+    }
+    return panel;
+}
+
+SDL_Surface* OverlayManager::drawTextPanel(OverlayType type)
 {
     auto& overlay = m_Overlays[type];
     if (overlay.text[0] == 0) {
@@ -437,7 +459,9 @@ SDL_Surface* OverlayManager::renderTextPanel(OverlayType type)
         SDL_Surface* lineSurface = TTF_RenderUTF8_Blended(overlay.font, line.constData(),
                                                           selected ? SDL_Color { 0xFF, 0xFF, 0xFF, 0xFF } : color);
         if (lineSurface == nullptr) {
-            continue;
+            // A panel missing a line could be missing the selection
+            SDL_FreeSurface(panel);
+            return nullptr;
         }
 
         SDL_Rect dst = { kPanelBorder + panelPaddingX(fontSize), y, 0, 0 };

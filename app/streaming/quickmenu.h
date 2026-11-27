@@ -56,8 +56,8 @@ public:
     QuickMenu& operator=(const QuickMenu&) = delete;
 
     // Called right before the stream's event loop starts and right after it
-    // ends. The menu only opens in between, and only while the renderer can
-    // display it.
+    // ends. The menu only opens in between, and only while it can be seen:
+    // the window isn't minimized or hidden, and the renderer can display it.
     void attach(SDL_Window* window, SdlInputHandler* inputHandler, NvComputer* computer,
                 const StreamingPreferences* preferences,
                 ServerCommandManager* serverCommandManager, ClipboardManager* clipboardManager);
@@ -75,13 +75,15 @@ public:
     // SDL_CODE_QUICK_MENU_TIMER
     void handleTimer();
 
-    // The window was resized or its renderer recreated: draw again for it, or
-    // close if the new renderer can't display the menu
+    // A window event, which may have resized, minimized or hidden the window
+    // or recreated its renderer: draw again for it, or close if the menu
+    // can't be seen anymore
     void refresh();
 
 private:
     void runActivation(const QuickMenuModel::Activation& activation);
     QuickMenuModel::HostState hostState() const;
+    const char* whyNotDisplayable() const;
     void showStatus(const QString& message);
     void render();
     bool scheduleTimer(Uint32 delayMs);

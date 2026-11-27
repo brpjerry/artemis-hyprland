@@ -136,9 +136,10 @@ void QuickMenu::open()
 
     // A menu nobody can see would still take the keyboard and gamepads, and
     // the next Enter or A would disconnect the stream
-    if (!m_OverlayManager.canShowOverlay(Overlay::OverlayQuickMenu)) {
+    if (const char* reason = whyNotDisplayable()) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Not opening the quick menu: the renderer can't display it");
+                    "Not opening the quick menu: %s",
+                    reason);
         return;
     }
 
@@ -179,6 +180,8 @@ void QuickMenu::handleCommand(Command command, bool repeat)
         return;
     }
 
+    const QuickMenuModel::Page previousPage = m_Model.page();
+    const int previousSelection = m_Model.selection();
     const int page = QuickMenuModel::kVisibleCommandRows;
 
     switch (command) {
@@ -220,7 +223,11 @@ void QuickMenu::handleCommand(Command command, bool repeat)
         return;
     }
 
-    render();
+    // Moves stop at the ends of the list on key repeat: don't draw the same
+    // panel again for those
+    if (m_Model.page() != previousPage || m_Model.selection() != previousSelection) {
+        render();
+    }
 }
 
 void QuickMenu::runActivation(const QuickMenuModel::Activation& activation)
@@ -357,14 +364,18 @@ void QuickMenu::handleTimer()
 
 void QuickMenu::refresh()
 {
-    // A recreated renderer may not be able to display the menu, so give the
-    // input back rather than keep it for a menu nobody can see
-    if (m_Model.isOpen() && !m_OverlayManager.canShowOverlay(Overlay::OverlayQuickMenu)) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Closing the quick menu: the new renderer can't display it");
-        m_Status.clear();
-        close();
-        return;
+    // Minimized, hidden, or a recreated renderer that can't display it: give
+    // the input back rather than keep it for a menu nobody can see. (With
+    // background gamepad input, a minimized stream still gets button events.)
+    if (m_Model.isOpen()) {
+        if (const char* reason = whyNotDisplayable()) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Closing the quick menu: %s",
+                        reason);
+            m_Status.clear();
+            close();
+            return;
+        }
     }
 
     if (m_OverlayManager.isOverlayEnabled(Overlay::OverlayQuickMenu)) {
@@ -405,6 +416,37 @@ void QuickMenu::render()
     SDL_assert(utf8.size() < m_OverlayManager.getOverlayMaxTextLength());
     m_OverlayManager.updateOverlayText(Overlay::OverlayQuickMenu, utf8.constData());
     m_OverlayManager.setOverlayState(Overlay::OverlayQuickMenu, true);
+
+    // If the panel couldn't be drawn, renderers keep showing the old one, or
+    // nothing: don't let Enter or A act on a selection nobody can see
+    if (m_OverlayManager.takeOverlayPanelFailure(Overlay::OverlayQuickMenu)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Closing the quick menu: its panel couldn't be drawn");
+        m_Status.clear();
+        m_OverlayManager.setOverlayState(Overlay::OverlayQuickMenu, false);
+        if (m_Model.isOpen()) {
+            m_Model.close();
+            m_InputHandler->setQuickMenuOpen(false);
+        }
+    }
+}
+
+const char* QuickMenu::whyNotDisplayable() const
+{
+    if (m_Window == nullptr) {
+        return "there's no stream window";
+    }
+
+    // A visible window on another display still works
+    if (SDL_GetWindowFlags(m_Window) & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) {
+        return "the stream window is minimized or hidden";
+    }
+
+    if (!m_OverlayManager.canShowOverlay(Overlay::OverlayQuickMenu)) {
+        return "the renderer can't display it";
+    }
+
+    return nullptr;
 }
 
 bool QuickMenu::scheduleTimer(Uint32 delayMs)
