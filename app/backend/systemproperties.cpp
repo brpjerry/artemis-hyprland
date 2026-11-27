@@ -6,6 +6,11 @@
 
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
+#include "settings/streamingpreferences.h"
+
+#ifdef HAVE_FFMPEG
+#include "streaming/video/ffmpeg.h"
+#endif
 
 #ifdef Q_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -191,6 +196,16 @@ int SystemProperties::getRefreshRate(int displayIndex)
 {
     // Returns 0 if out of bounds
     return monitorRefreshRates.value(displayIndex);
+}
+
+bool SystemProperties::supportsRendererBackend(int backend) const
+{
+#ifdef HAVE_FFMPEG
+    // The FFmpeg decoder is the only one that reads the preference
+    return FFmpegVideoDecoder::isRendererBackendSupported(backend);
+#else
+    return backend == StreamingPreferences::RB_AUTO;
+#endif
 }
 
 void SystemProperties::startAsyncLoad()

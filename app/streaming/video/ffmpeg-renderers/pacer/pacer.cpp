@@ -256,7 +256,7 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
         }
 
         // Keep a rolling 500 ms window of pacing queue history
-        if (m_PacingQueueHistory.count() == m_DisplayFps / 2) {
+        if (m_PacingQueueHistory.count() == qMax(1, m_DisplayFps / 2)) {
             m_PacingQueueHistory.dequeue();
         }
 
@@ -416,7 +416,7 @@ void Pacer::renderFrame(AVFrame* frame)
         }
 
         // Keep a rolling 500 ms window of render queue history
-        if (m_RenderQueueHistory.count() == m_MaxVideoFps / 2) {
+        if (m_RenderQueueHistory.count() == qMax(1, m_MaxVideoFps / 2)) {
             m_RenderQueueHistory.dequeue();
         }
 

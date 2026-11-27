@@ -32,6 +32,9 @@ public:
 
     virtual IFFmpegRenderer* getBackendRenderer();
 
+    // Whether this build can honor the given StreamingPreferences::RendererBackend
+    static bool isRendererBackendSupported(int backend);
+
 private:
     enum class TestMode {
         // No test frame and prepare for rendering

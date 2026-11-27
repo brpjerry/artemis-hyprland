@@ -345,17 +345,27 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
 
 int Session::drSetup(int videoFormat, int width, int height, int frameRate, void *, int)
 {
+    // frameRate is the stream configuration's FPS, which is in millihertz for
+    // a fractional refresh rate. The decoder, pacer and renderers that this
+    // feeds expect whole frames per second.
+    const int wholeFrameRate = s_ActiveSession->streamFpsToWholeFps(frameRate);
+
     s_ActiveSession->m_ActiveVideoFormat = videoFormat;
     s_ActiveSession->m_ActiveVideoWidth = width;
     s_ActiveSession->m_ActiveVideoHeight = height;
-    s_ActiveSession->m_ActiveVideoFrameRate = frameRate;
+    s_ActiveSession->m_ActiveVideoFrameRate = wholeFrameRate;
 
     // Defer decoder setup until we've started streaming so we
     // don't have to hide and show the SDL window (which seems to
     // cause pointer hiding to break on Windows).
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Video stream is %dx%dx%d (format 0x%x)",
-                width, height, frameRate, videoFormat);
+                width, height, wholeFrameRate, videoFormat);
+    if (s_ActiveSession->m_StreamFpsIsMillihertz) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Video stream frame rate: %.3f Hz requested from the host (%d mHz), decoding as %d FPS",
+                    frameRate / 1000.0, frameRate, wholeFrameRate);
+    }
 
     return 0;
 }
@@ -492,19 +502,25 @@ void Session::getDecoderInfo(SDL_Window* window,
                  "Failed to find ANY working H.264 or HEVC decoder!");
 }
 
+int Session::streamFpsToWholeFps(int streamFps) const
+{
+    // Decide by what initialize() actually sent rather than by the value or
+    // the live preference: an integer rate passed with --fps can exceed 1000,
+    // and the preference could change while this session runs.
+    if (!m_StreamFpsIsMillihertz) {
+        return streamFps;
+    }
+
+    // Convert back from Apollo's internal representation (fps * 1000),
+    // rounding like the settings UI does (59.94 -> 60) so display mode checks
+    // see the rate's real neighbour, not 59. Callers divide by the result, so
+    // never return 0.
+    return qMax(1, (streamFps + 500) / 1000);
+}
+
 int Session::getActualFpsForDecoderTest() const
 {
-    int fps = m_StreamConfig.fps;
-    
-    // If fractional refresh rate is enabled, the fps might be multiplied by 1000 for Apollo
-    if (m_Preferences->enableFractionalRefreshRate && fps > 1000) {
-        // Convert back from Apollo's internal representation (fps * 1000) to
-        // actual fps, rounding like the settings UI does (59.94 -> 60), so the
-        // display mode checks see the rate's real neighbour, not 59
-        fps = (fps + 500) / 1000;
-    }
-    
-    return fps;
+    return streamFpsToWholeFps(m_StreamConfig.fps);
 }
 
 Session::DecoderAvailability
@@ -610,6 +626,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
       m_PortTestResults(0),
+      m_StreamFpsIsMillihertz(false),
       m_OpusDecoder(nullptr),
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
@@ -736,15 +753,20 @@ bool Session::initialize(QQuickWindow* qtWindow)
     m_VideoCallbacks.setup = drSetup;
 
     m_StreamConfig.fps = m_Preferences->fps;
+    m_StreamFpsIsMillihertz = false;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
     // Artemis Apollo integration: Apply fractional refresh rate if enabled
     if (m_Preferences->enableFractionalRefreshRate) {
         // Convert fractional refresh rate to integer (multiply by 1000 for precision)
-        // This matches Apollo's internal representation: fps * 1000
-        int fractionalFps = (int)(m_Preferences->customRefreshRate * 1000);
+        // This matches Apollo's internal representation: fps * 1000. Round to the
+        // nearest millihertz, since e.g. 64.10 * 1000 is just below 64100.
+        // The host gets this value as-is (SDP maxFPS); streamFpsToWholeFps()
+        // converts it back for everything on the client side.
+        const int fractionalFps = qRound(m_Preferences->customRefreshRate * 1000);
         m_StreamConfig.fps = fractionalFps;
-        
+        m_StreamFpsIsMillihertz = true;
+
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Applied fractional refresh rate: %.2f Hz (internal: %d)",
                     m_Preferences->customRefreshRate,
@@ -1778,7 +1800,7 @@ bool Session::startConnectionAsync()
         NvHTTP http(m_Computer);
         http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
                       m_Computer->isNvidiaServerSoftware,
-                      m_App.id, m_App.uuid, &m_StreamConfig,
+                      m_App.id, m_App.uuid, &m_StreamConfig, m_StreamFpsIsMillihertz,
                       enableGameOptimizations,
                       m_Preferences->playAudioOnHost,
                       m_InputHandler->getAttachedGamepadMask(),

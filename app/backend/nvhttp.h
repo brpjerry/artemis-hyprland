@@ -187,6 +187,7 @@ public:
              int appId,
              QString appUuid,
              PSTREAM_CONFIGURATION streamConfig,
+             bool fpsIsMillihertz,
              bool sops,
              bool localAudio,
              int gamepadMask,
