@@ -27,6 +27,11 @@ public:
         SDL_assert(false);
         return false;
     }
+
+    // Called on the rendering thread, with Pacer's frame queue lock held,
+    // each time Pacer releases the renderer's render lock after rendering
+    // a frame. It must not block or take the frame queue lock.
+    virtual void renderLockReleased() {}
 };
 
 class Pacer
@@ -43,6 +48,12 @@ public:
     void signalVsync();
 
     void renderOnMainThread();
+
+    // The renderer's render lock (see IFFmpegRenderer::acquireRenderLock()),
+    // for vsync sources that touch the window's surface outside rendering
+    bool tryAcquireRenderLock();
+
+    void releaseRenderLock();
 
 private:
     static int vsyncThread(void* context);

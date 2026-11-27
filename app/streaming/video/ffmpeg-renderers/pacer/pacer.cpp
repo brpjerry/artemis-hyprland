@@ -60,9 +60,15 @@ Pacer::~Pacer()
         SDL_WaitThread(m_VsyncThread, nullptr);
     }
 
-    // Stop V-sync callbacks
-    delete m_VsyncSource;
-    m_VsyncSource = nullptr;
+    // Stop V-sync callbacks. renderFrame() on a still-running render
+    // thread only calls into the source under m_FrameQueueLock.
+    IVsyncSource* vsyncSource;
+    {
+        QMutexLocker locker(&m_FrameQueueLock);
+        vsyncSource = m_VsyncSource;
+        m_VsyncSource = nullptr;
+    }
+    delete vsyncSource;
 
     // Stop the render thread
     if (m_RenderThread != nullptr) {
@@ -373,6 +379,16 @@ void Pacer::signalVsync()
     m_VsyncSignalled.wakeOne();
 }
 
+bool Pacer::tryAcquireRenderLock()
+{
+    return m_VsyncRenderer->tryAcquireRenderLock();
+}
+
+void Pacer::releaseRenderLock()
+{
+    m_VsyncRenderer->releaseRenderLock();
+}
+
 void Pacer::renderFrame(AVFrame* frame)
 {
     // Count time spent in Pacer's queues
@@ -383,6 +399,12 @@ void Pacer::renderFrame(AVFrame* frame)
     m_VsyncRenderer->acquireRenderLock();
     m_VsyncRenderer->renderFrame(frame);
     m_VsyncRenderer->releaseRenderLock();
+    {
+        QMutexLocker locker(&m_FrameQueueLock);
+        if (m_VsyncSource != nullptr) {
+            m_VsyncSource->renderLockReleased();
+        }
+    }
     uint64_t afterRender = LiGetMicroseconds();
 
     m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);
