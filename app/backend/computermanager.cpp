@@ -34,7 +34,16 @@ public:
 private:
     bool tryPollComputer(QNetworkAccessManager* nam, NvAddress address, bool& changed)
     {
-        NvHTTP http(address, 0, m_Computer->serverCert, !m_Computer->isNvidiaServerSoftware, nam);
+        // Pairing publishes a new certificate under the host's lock, and a
+        // QSslCertificate copy isn't safe against a concurrent assignment
+        QSslCertificate serverCert;
+        bool isNvidiaServerSoftware;
+        {
+            QReadLocker lock(&m_Computer->lock);
+            serverCert = m_Computer->serverCert;
+            isNvidiaServerSoftware = m_Computer->isNvidiaServerSoftware;
+        }
+        NvHTTP http(address, 0, serverCert, !isNvidiaServerSoftware, nam);
 
         QString serverInfo;
         try {

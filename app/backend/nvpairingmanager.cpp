@@ -327,14 +327,32 @@ NvPairingManager::pair(QString appVersion, QString pin, QSslCertificate& serverC
 
     // verifyResponseStatus() logs the status message and puts it in the error
     // shown to the user. An OTP reply's message could echo the request, so
-    // remove otpauth and the salt from it first.
+    // OTP replies are checked here, with otpauth and the salt removed from the
+    // decoded message (XML character references can't hide them).
     QStringList otpSecrets;
-    auto verifyStatus = [&otpSecrets](const QString& xml) {
-        QString checked = xml;
-        for (const QString& secret : std::as_const(otpSecrets)) {
-            checked.replace(secret, QStringLiteral("REDACTED"), Qt::CaseInsensitive);
+    auto verifyStatus = [apolloOtp, &otpSecrets](const QString& xml) {
+        if (!apolloOtp) {
+            NvHTTP::verifyResponseStatus(xml);
+            return;
         }
-        NvHTTP::verifyResponseStatus(checked);
+
+        QXmlStreamReader xmlReader(xml);
+        while (xmlReader.readNextStartElement()) {
+            if (xmlReader.name() == QLatin1String("root")) {
+                const int statusCode = (int)xmlReader.attributes().value("status_code").toUInt();
+                if (statusCode == 200) {
+                    return;
+                }
+
+                QString statusMessage = xmlReader.attributes().value("status_message").toString();
+                for (const QString& secret : std::as_const(otpSecrets)) {
+                    statusMessage.replace(secret, QStringLiteral("REDACTED"), Qt::CaseInsensitive);
+                }
+                qWarning() << "Request failed:" << statusCode << statusMessage;
+                throw GfeHttpResponseException(statusCode, statusMessage);
+            }
+        }
+        throw GfeHttpResponseException(-1, "Malformed XML (missing root element)");
     };
 
     QByteArray aesKey = QCryptographicHash::hash(saltedPin, hashAlgo);
