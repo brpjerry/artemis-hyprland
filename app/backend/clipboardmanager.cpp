@@ -506,7 +506,7 @@ void ClipboardManager::uploadLocalClipboard(bool force, bool manual)
         // text sent, so it can't take that upload's result as its own.
         if (m_pendingUploadManual && m_pendingUploadText != text) {
             m_pendingUploadManual = false;
-            reportManualResult(true, false, tr("The clipboard changed before it was uploaded; sending the newer copy"));
+            reportManualResult(true, false, tr("A newer clipboard copy replaced the pending upload"));
         }
         m_pendingUploadText = text;
         m_pendingUploadForced |= force;
