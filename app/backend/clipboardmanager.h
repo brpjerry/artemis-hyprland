@@ -222,6 +222,8 @@ private:
 
     static QByteArray contentHash(const QByteArray &utf8);
     static QString formatSize(qint64 bytes);
+    // "<size>, the limit is <limit>", rounded unless both would look the same
+    static QString formatSizeOverLimit(qint64 size, qint64 limit);
 
     static constexpr int DEFAULT_MAX_SIZE = 1048576; // 1 MiB
 

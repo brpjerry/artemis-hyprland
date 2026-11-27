@@ -42,7 +42,10 @@ void QuickMenuModel::buildMainItems()
     m_MainItems.clear();
     m_MainItems.append({ Action::Disconnect,
                          QStringLiteral("Disconnect"),
-                         QStringLiteral("End the stream and leave the app running on the host"),
+                         // DeferredSessionCleanupTask quits the app if set
+                         m_Host.disconnectQuitsApp
+                             ? QStringLiteral("End the stream and quit the app on the host (your settings)")
+                             : QStringLiteral("End the stream and leave the app running on the host"),
                          QString() });
     m_MainItems.append({ Action::Quit,
                          QStringLiteral("Quit"),
@@ -199,7 +202,7 @@ QString QuickMenuModel::rowLabel(int row) const
         }
     }
     else {
-        label = sanitize(m_Host.serverCommands.at(row));
+        label = sanitize(m_Host.serverCommands.at(row).left(kMaxNameLength));
     }
 
     return elide(label, kMaxColumns - 2);
@@ -213,7 +216,7 @@ QString QuickMenuModel::detail() const
     }
 
     // The full name if the row had to cut it short
-    const QString name = sanitize(m_Host.serverCommands.at(m_Selection));
+    const QString name = sanitize(m_Host.serverCommands.at(m_Selection).left(kMaxNameLength));
     if (name.size() > kMaxColumns - 2) {
         return name;
     }
@@ -329,8 +332,17 @@ QStringList QuickMenuModel::wrap(const QString& text, int columns, int maxLines)
 {
     QStringList lines;
     QString current;
+    if (columns <= 0) {
+        return lines;
+    }
 
-    const QStringList words = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    // Only what can show is wrapped, plus a character to tell whether the
+    // last line needs a "...", so a huge unbroken name isn't copied for every
+    // line of it
+    const QString visibleText = maxLines > 0
+        ? text.simplified().left(qsizetype(maxLines) * (columns + 1) + 1)
+        : text;
+    const QStringList words = visibleText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     for (QString word : words) {
         // Break words that can't fit on a line of their own
         while (word.size() > columns) {

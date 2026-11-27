@@ -12,6 +12,7 @@ class ClipboardManager;
 class NvComputer;
 class SdlInputHandler;
 class ServerCommandManager;
+class StreamingPreferences;
 
 // SDL_USEREVENT code that wakes the stream's event loop when the quick menu's
 // status message expires
@@ -58,6 +59,7 @@ public:
     // ends. The menu only opens in between, and only while the renderer can
     // display it.
     void attach(SDL_Window* window, SdlInputHandler* inputHandler, NvComputer* computer,
+                const StreamingPreferences* preferences,
                 ServerCommandManager* serverCommandManager, ClipboardManager* clipboardManager);
     void detach();
 
@@ -82,7 +84,7 @@ private:
     QuickMenuModel::HostState hostState() const;
     void showStatus(const QString& message);
     void render();
-    void scheduleTimer(Uint32 delayMs);
+    bool scheduleTimer(Uint32 delayMs);
     void cancelTimer();
 
     static Uint32 timerCallback(Uint32 interval, void* param);
@@ -93,6 +95,7 @@ private:
     SDL_Window* m_Window;
     SdlInputHandler* m_InputHandler;
     NvComputer* m_Computer;
+    const StreamingPreferences* m_Preferences;
     ServerCommandManager* m_ServerCommandManager;
     ClipboardManager* m_ClipboardManager;
     QList<QMetaObject::Connection> m_Connections;

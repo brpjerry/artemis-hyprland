@@ -48,6 +48,7 @@ public:
         QString uploadUnavailable;
         QString fetchUnavailable;
         bool statsVisible = false;
+        bool disconnectQuitsApp = false; // "Quit app on host PC after ending stream"
     };
 
     // Rows of the server command list shown at once
@@ -58,6 +59,8 @@ public:
     static constexpr int kDetailLines = 2;
     // Lines of a status shown while the menu is closed
     static constexpr int kToastLines = 3;
+    // Characters of a host-supplied name that are looked at; more can't show
+    static constexpr int kMaxNameLength = 256;
 
     void open(const HostState& state);
     void close();
@@ -95,6 +98,8 @@ public:
     // Helpers, public for tests
     static QString sanitize(const QString& text); // Printable ASCII only
     static QString elide(const QString& text, int columns);
+    // Word-wraps text to at most maxLines lines (all of them if maxLines is
+    // 0), ending the last with "..." if it's cut short
     static QStringList wrap(const QString& text, int columns, int maxLines);
 
 private:

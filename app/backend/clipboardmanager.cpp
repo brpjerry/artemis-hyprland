@@ -10,6 +10,7 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QGuiApplication>
+#include <QLocale>
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QReadLocker>
@@ -493,8 +494,8 @@ void ClipboardManager::uploadLocalClipboard(bool force, bool manual)
     if (utf8.size() > m_maxClipboardSize) {
         qWarning() << "ClipboardManager: Local clipboard too large to upload:" << utf8.size() << "bytes";
         if (manual) {
-            reportManualResult(true, false, tr("The clipboard is too large to upload (%1, the limit is %2)")
-                                                .arg(formatSize(utf8.size()), formatSize(m_maxClipboardSize)));
+            reportManualResult(true, false, tr("The clipboard is too large to upload (%1)")
+                                                .arg(formatSizeOverLimit(utf8.size(), m_maxClipboardSize)));
         }
         return;
     }
@@ -703,8 +704,8 @@ bool ClipboardManager::applyFetchedClipboard(const QString &content, bool force,
         // NvHTTP already bounds the body to the limit. Text can still grow
         // here if the host sent invalid UTF-8, which decodes to U+FFFD.
         qWarning() << "ClipboardManager: Host clipboard too large:" << utf8.size() << "bytes";
-        *outcome = tr("The host's clipboard is too large (%1, the limit is %2)")
-                       .arg(formatSize(utf8.size()), formatSize(m_maxClipboardSize));
+        *outcome = tr("The host's clipboard is too large (%1)")
+                       .arg(formatSizeOverLimit(utf8.size(), m_maxClipboardSize));
         return false;
     }
 
@@ -730,8 +731,7 @@ bool ClipboardManager::applyFetchedClipboard(const QString &content, bool force,
     m_localUnconfirmed = false;
     m_textSetThroughSdl = utf8;
     qInfo() << "ClipboardManager: Set local clipboard from host (" << utf8.size() << "bytes)";
-    *outcome = content.size() == 1 ? tr("Copied the host's clipboard (1 character)")
-                                   : tr("Copied the host's clipboard (%1 characters)").arg(content.size());
+    *outcome = tr("Copied the host's clipboard");
     return true;
 }
 
@@ -750,6 +750,18 @@ QString ClipboardManager::formatSize(qint64 bytes)
         return tr("%1 KB").arg((bytes + 1023) / 1024);
     }
     return tr("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
+}
+
+QString ClipboardManager::formatSizeOverLimit(qint64 size, qint64 limit)
+{
+    QString sizeText = formatSize(size);
+    QString limitText = formatSize(limit);
+    if (sizeText == limitText) {
+        // Just over the limit: show exactly how far
+        sizeText = tr("%1 bytes").arg(QLocale().toString(size));
+        limitText = tr("%1 bytes").arg(QLocale().toString(limit));
+    }
+    return tr("%1, the limit is %2").arg(sizeText, limitText);
 }
 
 void ClipboardManager::enqueueHttpJob(HttpJob job)

@@ -6,6 +6,7 @@
 #include "backend/nvcomputer.h"
 #include "backend/servercommandmanager.h"
 #include "backend/serverpermissions.h"
+#include "settings/streamingpreferences.h"
 
 #include <QReadLocker>
 
@@ -30,7 +31,8 @@ void pushQuitEvent()
 
 QString quoted(const QString& commandName)
 {
-    return QStringLiteral("'%1'").arg(QuickMenuModel::elide(QuickMenuModel::sanitize(commandName), 24));
+    // Host names can be any length; 64 is plenty to elide to 24
+    return QStringLiteral("'%1'").arg(QuickMenuModel::elide(QuickMenuModel::sanitize(commandName.left(64)), 24));
 }
 
 }
@@ -40,6 +42,7 @@ QuickMenu::QuickMenu(Overlay::OverlayManager& overlayManager)
       m_Window(nullptr),
       m_InputHandler(nullptr),
       m_Computer(nullptr),
+      m_Preferences(nullptr),
       m_ServerCommandManager(nullptr),
       m_ClipboardManager(nullptr),
       m_StatusExpiry(0),
@@ -53,6 +56,7 @@ QuickMenu::~QuickMenu()
 }
 
 void QuickMenu::attach(SDL_Window* window, SdlInputHandler* inputHandler, NvComputer* computer,
+                       const StreamingPreferences* preferences,
                        ServerCommandManager* serverCommandManager, ClipboardManager* clipboardManager)
 {
     detach();
@@ -60,6 +64,7 @@ void QuickMenu::attach(SDL_Window* window, SdlInputHandler* inputHandler, NvComp
     m_Window = window;
     m_InputHandler = inputHandler;
     m_Computer = computer;
+    m_Preferences = preferences;
     m_ServerCommandManager = serverCommandManager;
     m_ClipboardManager = clipboardManager;
 
@@ -108,6 +113,7 @@ void QuickMenu::detach()
     m_Window = nullptr;
     m_InputHandler = nullptr;
     m_Computer = nullptr;
+    m_Preferences = nullptr;
     m_ServerCommandManager = nullptr;
     m_ClipboardManager = nullptr;
 }
@@ -285,6 +291,8 @@ QuickMenuModel::HostState QuickMenu::hostState() const
         state.serverCommands = m_ServerCommandManager->getAvailableCommands();
     }
     state.statsVisible = m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+    // The stream's cleanup quits the host app after a disconnect if set
+    state.disconnectQuitsApp = m_Preferences != nullptr && m_Preferences->quitAppAfter;
 
     bool isApollo = false;
     quint32 permissions = 0;
@@ -331,7 +339,13 @@ void QuickMenu::showStatus(const QString& message)
 
     m_Status = message;
     m_StatusExpiry = SDL_GetTicks() + kStatusDurationMs;
-    scheduleTimer(kStatusDurationMs);
+    if (!scheduleTimer(kStatusDurationMs)) {
+        // Nothing would take it down again
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Not showing the quick menu status: SDL_AddTimer() failed: %s",
+                    SDL_GetError());
+        m_Status.clear();
+    }
     render();
 }
 
@@ -393,12 +407,13 @@ void QuickMenu::render()
     m_OverlayManager.setOverlayState(Overlay::OverlayQuickMenu, true);
 }
 
-void QuickMenu::scheduleTimer(Uint32 delayMs)
+bool QuickMenu::scheduleTimer(Uint32 delayMs)
 {
     cancelTimer();
 
     // A little late, so the status has expired when it fires
     m_Timer = SDL_AddTimer(delayMs + 50, timerCallback, nullptr);
+    return m_Timer != 0;
 }
 
 void QuickMenu::cancelTimer()
@@ -416,8 +431,8 @@ Uint32 QuickMenu::timerCallback(Uint32, void*)
     SDL_Event event = {};
     event.type = SDL_USEREVENT;
     event.user.code = SDL_CODE_QUICK_MENU_TIMER;
-    SDL_PushEvent(&event);
 
-    // One-shot
-    return 0;
+    // One-shot, unless the event queue was full: then try again shortly, or
+    // the status would stay up
+    return SDL_PushEvent(&event) == 1 ? 0 : 100;
 }

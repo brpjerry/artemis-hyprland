@@ -2119,7 +2119,8 @@ void Session::exec()
     m_ClipboardManager->setConnection(m_Computer);
 
     // So does the quick menu, which is drawn into the stream as an overlay
-    m_QuickMenu->attach(m_Window, m_InputHandler, m_Computer, m_ServerCommandManager, m_ClipboardManager);
+    m_QuickMenu->attach(m_Window, m_InputHandler, m_Computer, m_Preferences,
+                        m_ServerCommandManager, m_ClipboardManager);
 
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
