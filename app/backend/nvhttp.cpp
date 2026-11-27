@@ -202,6 +202,7 @@ NvHTTP::startApp(QString verb,
                 int appId,
                 QString appUuid,
                 PSTREAM_CONFIGURATION streamConfig,
+                bool fpsIsMillihertz,
                 bool sops,
                 bool localAudio,
                 int gamepadMask,
@@ -238,11 +239,14 @@ NvHTTP::startApp(QString verb,
     //baseParams += "&mode=" + QString::number(streamConfig->width) + "x" +
     //            QString::number(streamConfig->height) + "x";
     
-    // Handle fractional refresh rate for Apollo servers
-    if (prefs->enableFractionalRefreshRate) {
+    // Handle fractional refresh rate for Apollo servers. Take the rate and its
+    // unit from the stream configuration the session captured, not from the
+    // preferences, which can change before this request is sent.
+    if (fpsIsMillihertz) {
         // Send fractional rate directly (Apollo will handle the conversion)
-        baseParams += QString::number(prefs->customRefreshRate, 'f', 2);
-        qInfo() << "Using fractional refresh rate:" << prefs->customRefreshRate << "Hz";
+        const double refreshRate = streamConfig->fps / 1000.0;
+        baseParams += QString::number(refreshRate, 'f', 2);
+        qInfo() << "Using fractional refresh rate:" << refreshRate << "Hz";
     } else {
         // Using an FPS value over 60 causes SOPS to default to 720p60,
         // so force it to 0 to ensure the correct resolution is set. We

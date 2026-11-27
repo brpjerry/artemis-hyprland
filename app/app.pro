@@ -210,7 +210,6 @@ SOURCES += \
     backend/clipboardmanager.cpp \
     backend/servercommandmanager.cpp \
     backend/serverpermissions.cpp \
-    backend/otppairingmanager.cpp \
     settings/artemissettings.cpp \
     wm.cpp
 
@@ -256,7 +255,6 @@ HEADERS += \
     backend/clipboardmanager.h \
     backend/servercommandmanager.h \
     backend/serverpermissions.h \
-    backend/otppairingmanager.h \
     settings/artemissettings.h
 
 # Platform-specific renderers and decoders

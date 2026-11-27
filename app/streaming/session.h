@@ -172,8 +172,14 @@ private:
     void getWindowDimensions(int& x, int& y,
                              int& width, int& height);
 
-    // Helper function to get actual fps for decoder tests
-    // Converts Apollo's internal fps representation (fps * 1000) back to normal fps
+    // Converts a stream frame rate as sent to the host (m_StreamConfig.fps,
+    // or the video setup callback's frameRate) to whole frames per second.
+    // A fractional refresh rate is sent in millihertz (Apollo's fps * 1000),
+    // but everything on the client side expects frames per second.
+    int streamFpsToWholeFps(int streamFps) const;
+
+    // The stream's frame rate in whole frames per second, for decoder tests,
+    // display mode selection and the default bitrate
     int getActualFpsForDecoderTest() const;
 
     void toggleFullscreen();
@@ -283,7 +289,10 @@ private:
     int m_ActiveVideoFormat;
     int m_ActiveVideoWidth;
     int m_ActiveVideoHeight;
-    int m_ActiveVideoFrameRate;
+    int m_ActiveVideoFrameRate; // Whole frames per second
+
+    // Whether m_StreamConfig.fps holds a fractional refresh rate in millihertz
+    bool m_StreamFpsIsMillihertz;
 
     OpusMSDecoder* m_OpusDecoder;
     IAudioRenderer* m_AudioRenderer;

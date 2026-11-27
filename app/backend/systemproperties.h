@@ -39,6 +39,10 @@ public:
     Q_INVOKABLE QRect getSafeAreaResolution(int displayIndex);
     Q_INVOKABLE int getRefreshRate(int displayIndex);
 
+    // Whether this build can honor a StreamingPreferences::RendererBackend
+    // value (Automatic always can)
+    Q_INVOKABLE bool supportsRendererBackend(int backend) const;
+
     Q_INVOKABLE void startAsyncLoad();
     Q_INVOKABLE void waitForAsyncLoad();
     Q_INVOKABLE void refreshDisplays();
