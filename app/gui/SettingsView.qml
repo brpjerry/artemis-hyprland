@@ -837,7 +837,10 @@ Flickable {
                     Button {
                         id: resetBitrateButton
                         text: qsTr("Use Default (%1 Mbps)").arg(slider.defaultBitrate() / 1000.0)
-                        visible: StreamingPreferences.bitrateKbps !== slider.defaultBitrate()
+                        // Also the only way back to automatic adjustment, so it stays
+                        // visible while that's off, even at the (capped) default
+                        visible: !StreamingPreferences.autoAdjustBitrate ||
+                                 StreamingPreferences.bitrateKbps !== slider.defaultBitrate()
                         onClicked: {
                             var defaultBitrate = slider.defaultBitrate()
                             StreamingPreferences.bitrateKbps = defaultBitrate
