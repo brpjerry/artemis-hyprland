@@ -215,8 +215,14 @@ QString QuickMenuModel::detail() const
         return item.unavailable.isEmpty() ? item.description : item.unavailable;
     }
 
-    // The full name if the row had to cut it short
-    const QString name = sanitize(m_Host.serverCommands.at(m_Selection).left(kMaxNameLength));
+    // The full name if the row had to cut it short. Past the part that's
+    // looked at, mark it cut short before wrapping, so a name whose first
+    // part fits on a line (say, after padding) doesn't look complete.
+    const QString& command = m_Host.serverCommands.at(m_Selection);
+    QString name = sanitize(command.left(kMaxNameLength));
+    if (command.size() > kMaxNameLength) {
+        name += QStringLiteral("...");
+    }
     if (name.size() > kMaxColumns - 2) {
         return name;
     }

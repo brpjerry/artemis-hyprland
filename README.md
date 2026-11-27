@@ -71,6 +71,8 @@ Artemis Qt is specifically optimized for handheld gaming devices like the Steam 
 
 **Gamepad:** `Select + L1 + R1 + Y`
 
+The quick menu needs a renderer that can display its overlay. Steam Link and MMAL can't, and with direct DRM or VAAPI rendering it depends on the driver. If the shortcut brings up no menu, look for `Not opening the quick menu` in the client log.
+
 The menu is drawn inside the stream window. In it, `Up`/`Down` (D-pad on a gamepad) move, `Enter` (`A`) selects, and `Esc` or `Backspace` (`B`) goes back or closes it. `Page Up`/`Page Down`, `Home` and `End` page through long server command lists. While it's open, the keyboard and gamepad buttons go to the menu instead of the host; the mouse still goes to the host.
 
 > **💡 Pro Tip:** The Quick Menu provides instant access to clipboard sync, server commands, streaming controls, and more - all without leaving your game!

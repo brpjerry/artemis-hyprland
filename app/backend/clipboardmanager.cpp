@@ -10,7 +10,6 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QGuiApplication>
-#include <QLocale>
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QReadLocker>
@@ -758,8 +757,9 @@ QString ClipboardManager::formatSizeOverLimit(qint64 size, qint64 limit)
     QString limitText = formatSize(limit);
     if (sizeText == limitText) {
         // Just over the limit: show exactly how far
-        sizeText = tr("%1 bytes").arg(QLocale().toString(size));
-        limitText = tr("%1 bytes").arg(QLocale().toString(limit));
+        // In plain digits: the overlay font only has ASCII
+        sizeText = tr("%1 bytes").arg(size);
+        limitText = tr("%1 bytes").arg(limit);
     }
     return tr("%1, the limit is %2").arg(sizeText, limitText);
 }
