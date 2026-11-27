@@ -295,8 +295,10 @@ QuickMenuModel::HostState QuickMenu::hostState() const
             : QStringLiteral("No server commands on this host");
     }
 
-    // The same permissions ClipboardManager checks before each request
-    if (!isApollo) {
+    // The same permission bits ClipboardManager checks before each request.
+    // Some Apollo builds don't report ApolloVersion, so a host that grants
+    // permissions counts as Apollo too.
+    if (!isApollo && permissions == 0) {
         state.uploadUnavailable = state.fetchUnavailable = QStringLiteral("Clipboard sync needs an Apollo host");
     }
     else {
