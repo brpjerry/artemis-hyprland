@@ -501,7 +501,13 @@ void ClipboardManager::uploadLocalClipboard(bool force, bool manual)
 
     const QString text = QString::fromUtf8(utf8);
     if (m_uploadInFlight) {
-        // Keep only the newest copy and send it once the current upload is done
+        // Keep only the newest copy and send it once the current upload is done.
+        // A manual request whose text a different copy replaces won't see its
+        // text sent, so it can't take that upload's result as its own.
+        if (m_pendingUploadManual && m_pendingUploadText != text) {
+            m_pendingUploadManual = false;
+            reportManualResult(true, false, tr("The clipboard changed before it was uploaded; sending the newer copy"));
+        }
         m_pendingUploadText = text;
         m_pendingUploadForced |= force;
         m_pendingUploadManual |= manual;
