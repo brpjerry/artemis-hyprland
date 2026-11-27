@@ -236,6 +236,7 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
+    streaming/input/quickmenuinputfilter.h \
     streaming/session.h \
     streaming/quickmenu.h \
     streaming/quickmenumodel.h \

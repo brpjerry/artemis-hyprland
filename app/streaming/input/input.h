@@ -2,6 +2,7 @@
 
 #include "settings/streamingpreferences.h"
 #include "backend/computermanager.h"
+#include "quickmenuinputfilter.h"
 
 #include "SDL_compat.h"
 
@@ -33,6 +34,7 @@ struct GamepadState {
 #endif
 
     int buttons;
+    int quickMenuButtons; // Artemis: see QuickMenuButtonFilter
     short lsX, lsY;
     short rsX, rsY;
     unsigned char lt, rt;
@@ -230,7 +232,7 @@ private:
     GamepadState m_GamepadState[MAX_GAMEPADS];
     QSet<uint32_t> m_KeysDown;
     bool m_QuickMenuOpen = false;
-    QSet<int> m_QuickMenuKeysDown; // Scancodes the quick menu took, until they're released
+    QuickMenuKeyFilter m_QuickMenuKeyFilter;
     bool m_FakeMouseCaptureActive;
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;

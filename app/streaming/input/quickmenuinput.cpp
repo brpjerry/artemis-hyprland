@@ -1,4 +1,5 @@
-// Artemis: input routing for the in-stream quick menu (streaming/quickmenu.h)
+// Artemis: input routing for the in-stream quick menu (streaming/quickmenu.h).
+// Which events are the menu's is decided in quickmenuinputfilter.h.
 
 #include "streaming/session.h"
 #include "streaming/quickmenu.h"
@@ -13,9 +14,11 @@ void SdlInputHandler::setQuickMenuOpen(bool open)
     }
 
     if (open) {
-        // Release everything the host has down. Keys and buttons the user
-        // keeps holding, the toggle combo's Ctrl+Alt+Shift included, then go
-        // to the menu until they're released, so nothing sticks on the host.
+        // Every key and button held now is the menu's until it's released,
+        // the toggle combo's included, and the host gets them all released.
+        // Their releases then never reach the host a second time, and held
+        // modifiers don't apply to keys after the menu closes.
+        m_QuickMenuKeyFilter.menuOpened();
         raiseAllKeys();
 
         for (int i = 0; i < MAX_GAMEPADS; i++) {
@@ -43,6 +46,7 @@ void SdlInputHandler::setQuickMenuOpen(bool open)
                 }
             }
 
+            QuickMenuButtonFilter::menuOpened(state->buttons, state->quickMenuButtons);
             LiSendMultiControllerEvent(state->index, m_GamepadMask, 0, 0, 0, 0, 0, 0, 0);
         }
 
@@ -51,18 +55,12 @@ void SdlInputHandler::setQuickMenuOpen(bool open)
     else {
         m_QuickMenuOpen = false;
 
+        // Sticks and triggers resume where they are. No pad has buttons down
+        // for the host (the menu keeps what's held until it's released), so
+        // single-controller merging sends none either.
         for (int i = 0; i < MAX_GAMEPADS; i++) {
             GamepadState* state = &m_GamepadState[i];
-            if (state->controller == nullptr) {
-                continue;
-            }
-
-            // Buttons still down were held when the menu opened (the host saw
-            // them released) or pressed for the menu, like the A or B that
-            // closed it. The host gets them on their next press. Sticks and
-            // triggers resume where they are.
-            state->buttons = 0;
-            if (state->mouseEmulationTimer == 0) {
+            if (state->controller != nullptr && state->mouseEmulationTimer == 0) {
                 sendGamepadState(state);
             }
         }
@@ -71,36 +69,20 @@ void SdlInputHandler::setQuickMenuOpen(bool open)
 
 bool SdlInputHandler::handleQuickMenuKeyEvent(SDL_KeyboardEvent* event)
 {
-    const int scancode = event->keysym.scancode;
+    const bool pressed = event->state == SDL_PRESSED;
+    const bool repeat = event->repeat != 0;
 
-    if (!m_QuickMenuOpen) {
-        // A key the menu took can still be down after it closed. The host
-        // never saw it pressed, so it doesn't get the release or repeats.
-        if (!m_QuickMenuKeysDown.contains(scancode)) {
-            return false;
-        }
-        if (event->state == SDL_RELEASED) {
-            m_QuickMenuKeysDown.remove(scancode);
-            return true;
-        }
-        if (event->repeat) {
-            return true;
-        }
-
-        // A new press means the release went missing (say, with focus), so
-        // this press and its release are the host's
-        m_QuickMenuKeysDown.remove(scancode);
+    // This also clears modifiers the menu still owns from events for the host
+    switch (m_QuickMenuKeyFilter.route(event->keysym.scancode, pressed, repeat, m_QuickMenuOpen, &event->keysym.mod)) {
+    case QuickMenuKeyFilter::Route::Host:
         return false;
-    }
-
-    if (event->state == SDL_RELEASED) {
-        m_QuickMenuKeysDown.remove(scancode);
+    case QuickMenuKeyFilter::Route::Drop:
         return true;
+    case QuickMenuKeyFilter::Route::Menu:
+        break;
     }
-    m_QuickMenuKeysDown.insert(scancode);
 
     QuickMenu* quickMenu = Session::get()->m_QuickMenu;
-    const bool repeat = event->repeat != 0;
 
     // The toggle combo closes the menu, as in performSpecialKeyCombo()
     const auto& toggleCombo = m_SpecialKeyCombos[KeyComboToggleQuickMenu];
@@ -151,23 +133,22 @@ bool SdlInputHandler::handleQuickMenuKeyEvent(SDL_KeyboardEvent* event)
 
 bool SdlInputHandler::handleQuickMenuButtonEvent(GamepadState* state, SDL_ControllerButtonEvent* event)
 {
-    if (!m_QuickMenuOpen) {
+    const bool pressed = event->state == SDL_PRESSED;
+
+    // The menu's buttons stay out of state->buttons, mouse emulation and the
+    // Start long press, even once it has closed, until they're released
+    if (!QuickMenuButtonFilter::route(state->quickMenuButtons, k_ButtonMap[event->button], pressed, m_QuickMenuOpen)) {
         return false;
     }
-
-    // Track the buttons without sending them. setQuickMenuOpen(false) clears
-    // what's still down once the menu closes.
-    if (event->state != SDL_PRESSED) {
-        state->buttons &= ~k_ButtonMap[event->button];
+    if (!m_QuickMenuOpen || !pressed) {
         return true;
     }
-    state->buttons |= k_ButtonMap[event->button];
 
     QuickMenu* quickMenu = Session::get()->m_QuickMenu;
 
     // The toggle combo (Select+L1+R1+Y) closes the menu, as in
     // handleControllerButtonEvent()
-    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG)) {
+    if (state->quickMenuButtons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG)) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quick menu toggle gamepad combo");
         quickMenu->close();
