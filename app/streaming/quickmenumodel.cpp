@@ -10,6 +10,17 @@ constexpr int kServerCommandsRow = 2;
 const char* const kSelectedMarker = "> ";
 const char* const kRowIndent = "  ";
 
+// Wraps text that isn't a menu row, indented by a column so no line can
+// start with the selection marker (a host's command name could)
+QStringList wrapIndented(const QString& text, int columns, int maxLines)
+{
+    QStringList lines = QuickMenuModel::wrap(text, columns - 1, maxLines);
+    for (QString& line : lines) {
+        line.prepend(QLatin1Char(' '));
+    }
+    return lines;
+}
+
 }
 
 void QuickMenuModel::open(const HostState& state)
@@ -278,7 +289,7 @@ QString QuickMenuModel::text(const QString& status) const
     }
     width = qMin(width, kMaxColumns);
 
-    QStringList detailLines = wrap(status.isEmpty() ? detail() : sanitize(status), width, kDetailLines);
+    QStringList detailLines = wrapIndented(status.isEmpty() ? detail() : sanitize(status), width, kDetailLines);
     while (detailLines.size() < kDetailLines) {
         detailLines.append(QString());
     }
@@ -296,7 +307,7 @@ QString QuickMenuModel::text(const QString& status) const
 
 QString QuickMenuModel::toastText(const QString& status)
 {
-    return wrap(sanitize(status), kMaxColumns, kToastLines).join(QLatin1Char('\n'));
+    return wrapIndented(sanitize(status), kMaxColumns, kToastLines).join(QLatin1Char('\n'));
 }
 
 QString QuickMenuModel::sanitize(const QString& text)
