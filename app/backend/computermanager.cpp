@@ -66,7 +66,19 @@ private:
 
     bool updateAppList(QNetworkAccessManager* nam, bool& changed)
     {
-        NvHTTP http(m_Computer, nam);
+        // Copy what NvHTTP needs under the host's lock, as tryPollComputer() does
+        NvAddress address;
+        uint16_t httpsPort;
+        QSslCertificate serverCert;
+        bool isNvidiaServerSoftware;
+        {
+            QReadLocker lock(&m_Computer->lock);
+            address = m_Computer->activeAddress;
+            httpsPort = m_Computer->activeHttpsPort;
+            serverCert = m_Computer->serverCert;
+            isNvidiaServerSoftware = m_Computer->isNvidiaServerSoftware;
+        }
+        NvHTTP http(address, httpsPort, serverCert, !isNvidiaServerSoftware, nam);
 
         QVector<NvApp> appList;
 
