@@ -46,6 +46,11 @@
 	</screenshots>
 
 	<releases>
+		<release version="0.7.1" date="2026-11-26">
+			<description>
+				<p>The main and stream windows now use the app ID com.artemis_desktop.Artemis instead of com.moonlight_stream.Moonlight, so update compositor window rules that match the old ID. The audio stream's application name is now Artemis instead of Moonlight. OTP pairing with Apollo hosts verifies the host the same way PIN pairing does, and works from the command line with --passphrase. A custom refresh rate such as 59.94 Hz stays set and streams at the right frame rate, and the renderer list only offers choices the build supports. An oversized host clipboard is abandoned instead of stalling sync. The quick menu (Ctrl+Alt+Shift+\) is drawn inside the stream, so it works over a fullscreen stream, and shows the results of its actions. It needs a renderer that can display overlays: Steam Link and MMAL can't, and with direct DRM or VAAPI rendering it depends on the driver.</p>
+			</description>
+		</release>
 		<release version="0.7.0" date="2026-11-26">
 			<description>
 				<p>Brings in moonlight-qt 6.2.0 and its later fixes. The quick menu no longer crashes during a stream, clipboard sync with Apollo hosts works on Wayland, and command-line on/off options such as --hdr take effect again.</p>

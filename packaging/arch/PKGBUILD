@@ -3,7 +3,7 @@
 # build-in-container.sh; see README.md for local builds.
 
 pkgname=artemis-hyprland
-pkgver=0.7.0
+pkgver=0.7.1
 pkgrel=1
 pkgdesc="Artemis GameStream client (Moonlight fork with Apollo extras), with Wayland and Hyprland fixes"
 arch=('x86_64')
