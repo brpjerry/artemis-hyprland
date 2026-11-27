@@ -252,9 +252,6 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
 
     m_Window = params->window;
     m_VideoFormat = params->videoFormat;
-    
-    // Get display dimensions for overlay positioning
-    SDL_GetWindowSize(m_Window, &m_DisplayWidth, &m_DisplayHeight);
 
     m_HwContext = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VAAPI);
     if (!m_HwContext) {
@@ -671,6 +668,13 @@ int VAAPIRenderer::getDecoderCapabilities()
     return caps;
 }
 
+bool VAAPIRenderer::canShowOverlay(Overlay::OverlayType)
+{
+    // Artemis: overlays are only drawn as subpictures with direct rendering
+    // on X11, which needs an overlay format
+    return m_WindowSystem == SDL_SYSWM_X11 && m_OverlayFormat.fourcc != 0;
+}
+
 void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
@@ -698,6 +702,10 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
     VASubpictureID oldSubpictureId = m_OverlaySubpicture[type];
     m_OverlaySubpicture[type] = 0;
+
+    // Artemis: tells a renderFrame() that holds the old overlay while it
+    // presents not to put it back (a new one sets a new rect)
+    SDL_zero(m_OverlayRect[type]);
     SDL_UnlockMutex(m_OverlayMutex);
 
     if (oldSubpictureId != 0) {
@@ -774,11 +782,12 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             overlayRect.x = 0;
             overlayRect.y = 0;
         }
-        else if (type == Overlay::OverlayServerCommands) {
-            // Center
-            overlayRect.x = (m_DisplayWidth - newSurface->w) / 2;
-            overlayRect.y = (m_DisplayHeight - newSurface->h) / 2;
-        } else {
+        else if (type == Overlay::OverlayQuickMenu) {
+            // Centered in renderFrame(), which knows the current window size
+            overlayRect.x = 0;
+            overlayRect.y = 0;
+        }
+        else {
             SDL_assert(false);
         }
 
@@ -874,6 +883,20 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
                 overlayRect.y += windowHeight;
             }
 
+            // Artemis: the quick menu is centered. Its panel is sized in
+            // window pixels, but the destination is in video surface units,
+            // which vaPutSurface() then scales into dst. Convert it, keeping
+            // it within the surface.
+            if (type == Overlay::OverlayQuickMenu) {
+                double scale = (double)src.w / SDL_max(1, dst.w);
+                scale = SDL_min(scale, (double)src.w / SDL_max(1, overlayRect.w));
+                scale = SDL_min(scale, (double)src.h / SDL_max(1, overlayRect.h));
+                overlayRect.w = SDL_max(1, (int)(overlayRect.w * scale + 0.5));
+                overlayRect.h = SDL_max(1, (int)(overlayRect.h * scale + 0.5));
+                overlayRect.x = SDL_max(0, (src.w - overlayRect.w) / 2);
+                overlayRect.y = SDL_max(0, (src.h - overlayRect.h) / 2);
+            }
+
             status = vaAssociateSubpicture(vaDeviceContext->display,
                                            m_OverlaySubpicture[type],
                                            &surface,
@@ -936,8 +959,12 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
                              status);
             }
 
+            // Artemis: an update while we were unlocked can also drop the
+            // overlay without a replacement (disabling it), which clears its rect
+            const bool invalidated = m_OverlayRect[type].w == 0;
+
             // If a new subpicture was populated while we were unlocked, free the old one we took ownership of
-            if (m_OverlaySubpicture[type] != 0) {
+            if (invalidated || m_OverlaySubpicture[type] != 0) {
                 status = vaDestroySubpicture(vaDeviceContext->display, associatedOverlaySubpictures[type]);
                 if (status != VA_STATUS_SUCCESS) {
                     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -951,7 +978,7 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
             }
 
             // If a new image was populated while we were unlocked, free the one old we took ownership of
-            if (m_OverlayImage[type].image_id != 0) {
+            if (invalidated || m_OverlayImage[type].image_id != 0) {
                 status = vaDestroyImage(vaDeviceContext->display, associatedOverlayImages[type].image_id);
                 if (status != VA_STATUS_SUCCESS) {
                     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

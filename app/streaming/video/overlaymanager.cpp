@@ -15,8 +15,9 @@ OverlayManager::OverlayManager() :
     m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
 
-    m_Overlays[OverlayType::OverlayServerCommands].color = {0x00, 0xCC, 0xCC, 0xFF};
-    m_Overlays[OverlayType::OverlayServerCommands].fontSize = 24;
+    // Artemis: the font size is chosen by setOverlayFitArea()
+    m_Overlays[OverlayType::OverlayQuickMenu].color = {0x00, 0xCC, 0xCC, 0xFF};
+    m_Overlays[OverlayType::OverlayQuickMenu].fontSize = 24;
 
     // While TTF will usually not be initialized here, it is valid for that not to
     // be the case, since Session destruction is deferred and could overlap with
@@ -120,6 +121,46 @@ void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
     m_Renderer = renderer;
 }
 
+bool OverlayManager::canShowOverlay(OverlayType type)
+{
+    if (!isFontUsable()) {
+        return false;
+    }
+
+    QReadLocker lock(&m_OverlayRendererLock);
+    return m_Renderer != nullptr && m_Renderer->canShowOverlay(type);
+}
+
+bool OverlayManager::isFontUsable()
+{
+    // The font data doesn't change, so check it once: it has to open and
+    // render text, which a damaged file can fail even when it isn't empty
+    if (m_FontUsable < 0) {
+        TTF_Font* font = nullptr;
+        SDL_Surface* text = nullptr;
+        if (!m_FontData.isEmpty() && TTF_WasInit() != 0) {
+            font = TTF_OpenFontRW(SDL_RWFromConstMem(m_FontData.constData(), m_FontData.size()), 1, 16);
+        }
+        if (font != nullptr) {
+            text = TTF_RenderUTF8_Blended(font, "Quick Menu", { 0xFF, 0xFF, 0xFF, 0xFF });
+        }
+
+        m_FontUsable = text != nullptr ? 1 : 0;
+        if (!m_FontUsable) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "The overlay font can't be used: %s",
+                        TTF_GetError());
+        }
+
+        SDL_FreeSurface(text);
+        if (font != nullptr) {
+            TTF_CloseFont(font);
+        }
+    }
+
+    return m_FontUsable == 1;
+}
+
 void OverlayManager::notifyOverlayUpdated(OverlayType type)
 {
     QReadLocker lock(&m_OverlayRendererLock);
@@ -129,7 +170,9 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
     }
 
     // Construct the required font to render the overlay
-    if (m_Overlays[type].font == nullptr) {
+    // Artemis: fitted panels open their own font, and disabling an overlay
+    // needs none, so a font that won't open can't keep it on screen
+    if (m_Overlays[type].enabled && m_Overlays[type].fitWidth == 0 && m_Overlays[type].font == nullptr) {
         if (m_FontData.isEmpty()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "SDL overlay font failed to load");
@@ -154,13 +197,15 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
     SDL_Surface* oldSurface = (SDL_Surface*)SDL_AtomicSetPtr(
         (void**)&m_Overlays[type].surface,
         m_Overlays[type].enabled ?
+            // Artemis: fitted overlays are drawn on a panel
+            (m_Overlays[type].fitWidth > 0 ? renderTextPanel(type) :
             // The _Wrapped variant is required for line breaks to work
             RenderTextOutlinedWrapped(m_Overlays[type].font,
                                       m_Overlays[type].text,
                                       m_Overlays[type].color,
                                       {0, 0, 0, 255},
                                       4,
-                                      1024)
+                                      1024))
             : nullptr);
 
     // Notify the renderer
@@ -214,4 +259,217 @@ SDL_Surface* OverlayManager::RenderTextOutlinedWrapped(TTF_Font* font, const cha
     return outlineSurface;
 }
 
+// Artemis: fitted text panels (the quick menu)
 
+namespace {
+
+constexpr int kPanelMinFontSize = 8;
+constexpr int kPanelBorder = 2;
+
+int panelPaddingX(int fontSize)
+{
+    return fontSize;
+}
+
+int panelPaddingY(int fontSize)
+{
+    return fontSize / 2;
+}
+
+int panelWidth(int textWidth, int fontSize)
+{
+    return textWidth + 2 * (panelPaddingX(fontSize) + kPanelBorder);
+}
+
+int panelHeight(int textHeight, int fontSize)
+{
+    return textHeight + 2 * (panelPaddingY(fontSize) + kPanelBorder);
+}
+
+bool measureLines(TTF_Font* font, const QList<QByteArray>& lines, int* width, int* height)
+{
+    int maxWidth = 0;
+    for (const QByteArray& line : lines) {
+        if (line.isEmpty()) {
+            continue;
+        }
+
+        int lineWidth, lineHeight;
+        if (TTF_SizeUTF8(font, line.constData(), &lineWidth, &lineHeight) != 0) {
+            return false;
+        }
+        maxWidth = qMax(maxWidth, lineWidth);
+    }
+
+    *width = maxWidth;
+    *height = TTF_FontLineSkip(font) * (int)lines.size();
+    return true;
+}
+
+}
+
+void OverlayManager::setOverlayFitArea(OverlayType type, int maxWidth, int maxHeight, int maxFontSize)
+{
+    auto& overlay = m_Overlays[type];
+    if (overlay.fitWidth != maxWidth || overlay.fitHeight != maxHeight || overlay.maxFontSize != maxFontSize) {
+        overlay.fitWidth = maxWidth;
+        overlay.fitHeight = maxHeight;
+        overlay.maxFontSize = maxFontSize;
+
+        // Fit the font again on the next update
+        overlay.fittedLines = 0;
+        overlay.fittedColumns = 0;
+    }
+}
+
+bool OverlayManager::openOverlayFont(OverlayType type, int fontSize)
+{
+    auto& overlay = m_Overlays[type];
+    if (overlay.font != nullptr && overlay.fontSize == fontSize) {
+        return true;
+    }
+
+    if (overlay.font != nullptr) {
+        TTF_CloseFont(overlay.font);
+        overlay.font = nullptr;
+    }
+    overlay.fontSize = fontSize;
+
+    if (m_FontData.isEmpty()) {
+        return false;
+    }
+
+    // m_FontData must stay around until the font is closed
+    overlay.font = TTF_OpenFontRW(SDL_RWFromConstMem(m_FontData.constData(), m_FontData.size()),
+                                  1,
+                                  fontSize);
+    if (overlay.font == nullptr) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "TTF_OpenFont() failed: %s",
+                    TTF_GetError());
+        return false;
+    }
+
+    return true;
+}
+
+bool OverlayManager::takeOverlayPanelFailure(OverlayType type)
+{
+    const bool failed = m_Overlays[type].panelFailed;
+    m_Overlays[type].panelFailed = false;
+    return failed;
+}
+
+SDL_Surface* OverlayManager::renderTextPanel(OverlayType type)
+{
+    SDL_Surface* panel = drawTextPanel(type);
+
+    // Empty text draws nothing, and that's no failure
+    m_Overlays[type].panelFailed = panel == nullptr && m_Overlays[type].text[0] != 0;
+    if (m_Overlays[type].panelFailed) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Couldn't draw overlay %d: %s",
+                    type,
+                    SDL_GetError());
+    }
+    return panel;
+}
+
+SDL_Surface* OverlayManager::drawTextPanel(OverlayType type)
+{
+    auto& overlay = m_Overlays[type];
+    if (overlay.text[0] == 0) {
+        return nullptr;
+    }
+
+    const QList<QByteArray> lines = QByteArray(overlay.text).split('\n');
+    int columns = 0;
+    for (const QByteArray& line : lines) {
+        columns = qMax(columns, (int)line.size());
+    }
+
+    const int maxFontSize = qMax(kPanelMinFontSize, overlay.maxFontSize);
+    int fontSize = qBound(kPanelMinFontSize, overlay.font != nullptr ? overlay.fontSize : maxFontSize, maxFontSize);
+    int textWidth, textHeight;
+    if (!openOverlayFont(type, fontSize) || !measureLines(overlay.font, lines, &textWidth, &textHeight)) {
+        return nullptr;
+    }
+
+    // Fit the font size when the area or the text's shape changed. Keeping
+    // it otherwise avoids reopening the font on every update, and the menu's
+    // text from resizing as the selection moves.
+    if (overlay.fittedLines != (int)lines.size() || overlay.fittedColumns != columns) {
+        // The overlay font is monospaced, so text scales with the font size
+        // and one measurement estimates the size that fills the area. The
+        // fixed border makes that an underestimate when growing and at most
+        // slightly over when shrinking, which the loop below corrects.
+        const double scale = qMin((double)overlay.fitWidth / panelWidth(textWidth, fontSize),
+                                  (double)overlay.fitHeight / panelHeight(textHeight, fontSize));
+        const int estimate = qBound(kPanelMinFontSize, (int)(fontSize * scale), maxFontSize);
+        if (estimate != fontSize) {
+            fontSize = estimate;
+            if (!openOverlayFont(type, fontSize) || !measureLines(overlay.font, lines, &textWidth, &textHeight)) {
+                return nullptr;
+            }
+        }
+
+        while (fontSize > kPanelMinFontSize &&
+               (panelWidth(textWidth, fontSize) > overlay.fitWidth ||
+                panelHeight(textHeight, fontSize) > overlay.fitHeight)) {
+            fontSize--;
+            if (!openOverlayFont(type, fontSize) || !measureLines(overlay.font, lines, &textWidth, &textHeight)) {
+                return nullptr;
+            }
+        }
+
+        overlay.fittedLines = (int)lines.size();
+        overlay.fittedColumns = columns;
+    }
+
+    const int width = panelWidth(textWidth, fontSize);
+    const int height = panelHeight(textHeight, fontSize);
+    SDL_Surface* panel = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (panel == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "SDL_CreateRGBSurfaceWithFormat() failed: %s",
+                     SDL_GetError());
+        return nullptr;
+    }
+
+    // A border in the overlay's color around a dark, translucent backdrop
+    const SDL_Color color = overlay.color;
+    SDL_FillRect(panel, nullptr, SDL_MapRGBA(panel->format, color.r, color.g, color.b, 0xFF));
+    SDL_Rect backdrop = { kPanelBorder, kPanelBorder, width - 2 * kPanelBorder, height - 2 * kPanelBorder };
+    SDL_FillRect(panel, &backdrop, SDL_MapRGBA(panel->format, 0x00, 0x00, 0x00, 0xD8));
+
+    const int lineSkip = TTF_FontLineSkip(overlay.font);
+    for (int i = 0; i < (int)lines.size(); i++) {
+        const QByteArray& line = lines.at(i);
+        if (line.isEmpty()) {
+            continue;
+        }
+
+        const int y = kPanelBorder + panelPaddingY(fontSize) + i * lineSkip;
+
+        // The selected row: white text on a bar in a darker shade of the color
+        const bool selected = line.startsWith('>');
+        if (selected) {
+            SDL_Rect bar = { kPanelBorder, y, width - 2 * kPanelBorder, lineSkip };
+            SDL_FillRect(panel, &bar, SDL_MapRGBA(panel->format, color.r / 3, color.g / 3, color.b / 3, 0xE0));
+        }
+
+        SDL_Surface* lineSurface = TTF_RenderUTF8_Blended(overlay.font, line.constData(),
+                                                          selected ? SDL_Color { 0xFF, 0xFF, 0xFF, 0xFF } : color);
+        if (lineSurface == nullptr) {
+            // A panel missing a line could be missing the selection
+            SDL_FreeSurface(panel);
+            return nullptr;
+        }
+
+        SDL_Rect dst = { kPanelBorder + panelPaddingX(fontSize), y, 0, 0 };
+        SDL_BlitSurface(lineSurface, nullptr, panel, &dst);
+        SDL_FreeSurface(lineSurface);
+    }
+
+    return panel;
+}

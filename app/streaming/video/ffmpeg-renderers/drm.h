@@ -773,6 +773,7 @@ public:
     virtual int getDecoderColorRange() override;
     virtual void setHdrMode(bool enabled) override;
     virtual void notifyOverlayUpdated(Overlay::OverlayType type) override;
+    virtual bool canShowOverlay(Overlay::OverlayType type) override;
 #ifdef HAVE_EGL
     virtual bool canExportEGL() override;
     virtual AVPixelFormat getEGLImagePixelFormat() override;

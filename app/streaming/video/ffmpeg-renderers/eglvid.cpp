@@ -216,7 +216,7 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
             overlayRect.x = 0;
             overlayRect.y = viewportHeight - newSurface->h;
         }
-        else if (type == Overlay::OverlayServerCommands) {
+        else if (type == Overlay::OverlayQuickMenu) {
             // Center
             overlayRect.x = (viewportWidth - newSurface->w) / 2;
             overlayRect.y = (viewportHeight - newSurface->h) / 2;

@@ -103,11 +103,15 @@ void ClipboardManager::resetStreamState()
     m_textSetThroughSdl.clear();
     m_coveredClipboardUpdates = 0;
     m_uploadInFlight = false;
+    m_uploadInFlightManual = false;
     m_pendingUploadText.clear();
     m_pendingUploadForced = false;
+    m_pendingUploadManual = false;
     m_fetchInFlight = false;
+    m_fetchInFlightManual = false;
     m_fetchSuperseded = false;
     m_pendingFetch = PendingFetch::None;
+    m_pendingFetchManual = false;
 }
 
 void ClipboardManager::prepareForStream()
@@ -391,7 +395,7 @@ void ClipboardManager::processPendingWork(bool uploadCurrentOffer)
     // A pending manual upload is the same read, so it's folded in (with its
     // force flag) instead of POSTing the same text twice.
     if (uploadCurrentOffer) {
-        uploadLocalClipboard(work.manualUpload && work.manualUploadForced);
+        uploadLocalClipboard(work.manualUpload && work.manualUploadForced, work.manualUpload);
         work.manualUpload = false;
     }
 
@@ -404,10 +408,10 @@ void ClipboardManager::processPendingWork(bool uploadCurrentOffer)
         handleFetchResult(work.fetchStatus, work.fetchedContent, work.fetchForced);
     }
     if (work.manualUpload) {
-        uploadLocalClipboard(work.manualUploadForced);
+        uploadLocalClipboard(work.manualUploadForced, true);
     }
     if (work.manualFetch) {
-        requestFetch(true);
+        requestFetch(true, true);
     }
 
     startDeferredFetch();
@@ -448,13 +452,16 @@ void ClipboardManager::onStreamFocusLost()
     }
 }
 
-void ClipboardManager::uploadLocalClipboard(bool force)
+void ClipboardManager::uploadLocalClipboard(bool force, bool manual)
 {
     if (!isConnected()) {
         return;
     }
     if (!m_hostAcceptsUpload) {
         // Not an Apollo host, or this client may not set its clipboard
+        if (manual) {
+            reportManualResult(true, false, tr("The host doesn't accept clipboard text from this client"));
+        }
         return;
     }
 
@@ -471,6 +478,9 @@ void ClipboardManager::uploadLocalClipboard(bool force)
         if (force) {
             qDebug() << "ClipboardManager: No text on the local clipboard to upload";
         }
+        if (manual) {
+            reportManualResult(true, false, tr("There's no text on the clipboard to upload"));
+        }
         return;
     }
 
@@ -482,32 +492,49 @@ void ClipboardManager::uploadLocalClipboard(bool force)
 
     if (utf8.size() > m_maxClipboardSize) {
         qWarning() << "ClipboardManager: Local clipboard too large to upload:" << utf8.size() << "bytes";
+        if (manual) {
+            reportManualResult(true, false, tr("The clipboard is too large to upload (%1)")
+                                                .arg(formatSizeOverLimit(utf8.size(), m_maxClipboardSize)));
+        }
         return;
     }
 
     const QString text = QString::fromUtf8(utf8);
     if (m_uploadInFlight) {
-        // Keep only the newest copy and send it once the current upload is done
+        // Keep only the newest copy and send it once the current upload is done.
+        // A manual request whose text a different copy replaces won't see its
+        // text sent, so it can't take that upload's result as its own.
+        if (m_pendingUploadManual && m_pendingUploadText != text) {
+            m_pendingUploadManual = false;
+            reportManualResult(true, false, tr("A newer clipboard copy replaced the pending upload"));
+        }
         m_pendingUploadText = text;
         m_pendingUploadForced |= force;
+        m_pendingUploadManual |= manual;
         return;
     }
 
-    startUpload(text, force);
+    startUpload(text, force, manual);
 }
 
-void ClipboardManager::startUpload(const QString &text, bool force)
+void ClipboardManager::startUpload(const QString &text, bool force, bool manual)
 {
     const QByteArray hash = contentHash(text.toUtf8());
     // After a failed upload, resend even the last synced text: its
     // acknowledgement is what re-enables automatic fetches
     if (!force && !m_localUnconfirmed && hash == m_lastSyncedHash) {
         // Already on the host (including our own SDL_SetClipboardText() echo)
+        if (manual) {
+            reportManualResult(true, true, tr("The host already has this clipboard text"));
+        }
         return;
     }
 
     HttpJob job;
     if (!currentEndpoint(&job.endpoint, &job.generation)) {
+        if (manual) {
+            reportManualResult(true, false, tr("The host has no active address"));
+        }
         return;
     }
     job.kind = HttpJob::Kind::Upload;
@@ -515,6 +542,7 @@ void ClipboardManager::startUpload(const QString &text, bool force)
     job.hash = hash;
 
     m_uploadInFlight = true;
+    m_uploadInFlightManual = manual;
     if (m_fetchInFlight) {
         // That fetch may return the host's text from before this upload
         m_fetchSuperseded = true;
@@ -524,10 +552,13 @@ void ClipboardManager::startUpload(const QString &text, bool force)
     enqueueHttpJob(std::move(job));
 }
 
-void ClipboardManager::requestFetch(bool force)
+void ClipboardManager::requestFetch(bool force, bool manual)
 {
     if (!m_hostServesFetch) {
         // Not an Apollo host, or this client may not read its clipboard
+        if (manual) {
+            reportManualResult(false, false, tr("The host doesn't share its clipboard with this client"));
+        }
         return;
     }
     if (m_uploadInFlight || m_fetchInFlight) {
@@ -537,6 +568,7 @@ void ClipboardManager::requestFetch(bool force)
         if (force || m_pendingFetch == PendingFetch::None) {
             m_pendingFetch = force ? PendingFetch::Forced : PendingFetch::IfChanged;
         }
+        m_pendingFetchManual |= manual;
         return;
     }
 
@@ -550,12 +582,16 @@ void ClipboardManager::requestFetch(bool force)
 
     HttpJob job;
     if (!currentEndpoint(&job.endpoint, &job.generation)) {
+        if (manual) {
+            reportManualResult(false, false, tr("The host has no active address"));
+        }
         return;
     }
     job.kind = HttpJob::Kind::Fetch;
     job.force = force;
 
     m_fetchInFlight = true;
+    m_fetchInFlightManual = manual;
     m_fetchSuperseded = false;
 
     qDebug() << "ClipboardManager: Fetching host clipboard";
@@ -569,13 +605,17 @@ void ClipboardManager::startDeferredFetch()
     }
 
     const bool force = m_pendingFetch == PendingFetch::Forced;
+    const bool manual = m_pendingFetchManual;
     m_pendingFetch = PendingFetch::None;
-    requestFetch(force);
+    m_pendingFetchManual = false;
+    requestFetch(force, manual);
 }
 
 void ClipboardManager::handleUploadResult(bool success, const QByteArray &hash)
 {
     m_uploadInFlight = false;
+    const bool manual = m_uploadInFlightManual;
+    m_uploadInFlightManual = false;
 
     if (success) {
         // Only now does the host hold this content
@@ -591,18 +631,27 @@ void ClipboardManager::handleUploadResult(bool success, const QByteArray &hash)
         qWarning() << "ClipboardManager: Failed to upload clipboard to host";
     }
 
+    if (manual) {
+        reportManualResult(true, success, success ? tr("Uploaded the clipboard to the host")
+                                                  : tr("Couldn't upload the clipboard to the host"));
+    }
+
     if (!m_pendingUploadText.isEmpty()) {
         QString text;
         text.swap(m_pendingUploadText);
         const bool force = m_pendingUploadForced;
+        const bool pendingManual = m_pendingUploadManual;
         m_pendingUploadForced = false;
-        startUpload(text, force);
+        m_pendingUploadManual = false;
+        startUpload(text, force, pendingManual);
     }
 }
 
 void ClipboardManager::handleFetchResult(FetchStatus status, const QString &content, bool force)
 {
     m_fetchInFlight = false;
+    const bool manual = m_fetchInFlightManual;
+    m_fetchInFlightManual = false;
 
     if (m_fetchSuperseded) {
         m_fetchSuperseded = false;
@@ -612,6 +661,7 @@ void ClipboardManager::handleFetchResult(FetchStatus status, const QString &cont
         qDebug() << "ClipboardManager: Dropping host clipboard fetched before a newer upload";
         if (force) {
             m_pendingFetch = PendingFetch::Forced;
+            m_pendingFetchManual |= manual;
         }
         return;
     }
@@ -619,24 +669,32 @@ void ClipboardManager::handleFetchResult(FetchStatus status, const QString &cont
     // A failed or abandoned fetch tells nothing about the host's clipboard, so
     // the local clipboard and the sync state stay as they are. Neither is
     // retried: the next focus loss or manual request fetches again.
+    QString outcome;
+    bool applied = false;
     switch (status) {
     case FetchStatus::Fetched:
-        applyFetchedClipboard(content, force);
+        applied = applyFetchedClipboard(content, force, &outcome);
         break;
     case FetchStatus::TooLarge:
         qWarning() << "ClipboardManager: Host clipboard is over the size limit, keeping the local clipboard";
+        outcome = tr("The host's clipboard is over the %1 limit").arg(formatSize(m_maxClipboardSize));
         break;
     case FetchStatus::Failed:
         // The worker logged why
+        outcome = tr("Couldn't fetch the host's clipboard");
         break;
+    }
+    if (manual) {
+        reportManualResult(false, applied, outcome);
     }
 }
 
-void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
+bool ClipboardManager::applyFetchedClipboard(const QString &content, bool force, QString *outcome)
 {
     if (content.isEmpty()) {
         qDebug() << "ClipboardManager: Host clipboard has no text";
-        return;
+        *outcome = tr("The host's clipboard has no text");
+        return false;
     }
 
     const QByteArray utf8 = content.toUtf8();
@@ -644,13 +702,16 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
         // SDL_SetClipboardText() takes a NUL-terminated string, so it would
         // only install the text before the NUL
         qWarning() << "ClipboardManager: Host clipboard contains an embedded NUL, not applying it";
-        return;
+        *outcome = tr("The host's clipboard text contains a NUL character");
+        return false;
     }
     if (utf8.size() > m_maxClipboardSize) {
         // NvHTTP already bounds the body to the limit. Text can still grow
         // here if the host sent invalid UTF-8, which decodes to U+FFFD.
         qWarning() << "ClipboardManager: Host clipboard too large:" << utf8.size() << "bytes";
-        return;
+        *outcome = tr("The host's clipboard is too large (%1)")
+                       .arg(formatSizeOverLimit(utf8.size(), m_maxClipboardSize));
+        return false;
     }
 
     const QByteArray hash = contentHash(utf8);
@@ -658,7 +719,8 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
         // The host hasn't changed its clipboard since the last sync. Don't
         // replace anything copied locally since then with stale host content.
         qDebug() << "ClipboardManager: Host clipboard unchanged since last sync";
-        return;
+        *outcome = tr("The host's clipboard hasn't changed");
+        return false;
     }
 
     // SDL owns the selection on its own display connection and answers
@@ -666,13 +728,46 @@ void ClipboardManager::applyFetchedClipboard(const QString &content, bool force)
     // over to Qt when that loop ends.
     if (SDL_SetClipboardText(utf8.constData()) != 0) {
         qWarning() << "ClipboardManager: Failed to set local clipboard:" << SDL_GetError();
-        return;
+        *outcome = tr("Couldn't set the clipboard: %1").arg(QString::fromUtf8(SDL_GetError()));
+        return false;
     }
 
     m_lastSyncedHash = hash;
     m_localUnconfirmed = false;
     m_textSetThroughSdl = utf8;
     qInfo() << "ClipboardManager: Set local clipboard from host (" << utf8.size() << "bytes)";
+    *outcome = tr("Copied the host's clipboard");
+    return true;
+}
+
+void ClipboardManager::reportManualResult(bool upload, bool succeeded, const QString &message)
+{
+    qInfo() << "ClipboardManager: Manual" << (upload ? "upload:" : "fetch:") << message;
+    emit manualRequestFinished(upload, succeeded, message);
+}
+
+QString ClipboardManager::formatSize(qint64 bytes)
+{
+    if (bytes < 1024) {
+        return bytes == 1 ? tr("1 byte") : tr("%1 bytes").arg(bytes);
+    }
+    if (bytes < 1024 * 1024) {
+        return tr("%1 KB").arg((bytes + 1023) / 1024);
+    }
+    return tr("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
+}
+
+QString ClipboardManager::formatSizeOverLimit(qint64 size, qint64 limit)
+{
+    QString sizeText = formatSize(size);
+    QString limitText = formatSize(limit);
+    if (sizeText == limitText) {
+        // Just over the limit: show exactly how far
+        // In plain digits: the overlay font only has ASCII
+        sizeText = tr("%1 bytes").arg(size);
+        limitText = tr("%1 bytes").arg(limit);
+    }
+    return tr("%1, the limit is %2").arg(sizeText, limitText);
 }
 
 void ClipboardManager::enqueueHttpJob(HttpJob job)

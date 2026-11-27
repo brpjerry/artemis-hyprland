@@ -192,6 +192,9 @@ SOURCES += \
     streaming/input/mouse.cpp \
     streaming/input/reltouch.cpp \
     streaming/session.cpp \
+    streaming/quickmenu.cpp \
+    streaming/quickmenumodel.cpp \
+    streaming/input/quickmenuinput.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
     gui/computermodel.cpp \
@@ -207,7 +210,6 @@ SOURCES += \
     backend/clipboardmanager.cpp \
     backend/servercommandmanager.cpp \
     backend/serverpermissions.cpp \
-    backend/quickmenumanager.cpp \
     settings/artemissettings.cpp \
     wm.cpp
 
@@ -233,7 +235,10 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
+    streaming/input/quickmenuinputfilter.h \
     streaming/session.h \
+    streaming/quickmenu.h \
+    streaming/quickmenumodel.h \
     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
@@ -250,7 +255,6 @@ HEADERS += \
     backend/clipboardmanager.h \
     backend/servercommandmanager.h \
     backend/serverpermissions.h \
-    backend/quickmenumanager.h \
     settings/artemissettings.h
 
 # Platform-specific renderers and decoders

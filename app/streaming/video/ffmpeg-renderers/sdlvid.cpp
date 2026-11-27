@@ -246,7 +246,7 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
                 m_OverlayRects[type].x = 0;
                 m_OverlayRects[type].y = 0;
             }
-            else if (type == Overlay::OverlayServerCommands) {
+            else if (type == Overlay::OverlayQuickMenu) {
                 // Center
                 SDL_Rect viewportRect;
                 SDL_RenderGetViewport(m_Renderer, &viewportRect);
