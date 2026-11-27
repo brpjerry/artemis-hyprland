@@ -56,6 +56,11 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
 {
     SDL_assert(m_GamepadMask == 0x1 || m_MultiController);
 
+    // Artemis: the host keeps a released gamepad while the quick menu is open
+    if (m_QuickMenuOpen) {
+        return;
+    }
+
     // Handle Select+PS as the clickpad button on PS4/5 controllers without a clickpad mapping
     int buttons = state->buttons;
     if (state->clickpadButtonEmulationEnabled) {
@@ -303,6 +308,11 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
             event->button = SDL_CONTROLLER_BUTTON_X;
             break;
         }
+    }
+
+    // Artemis: buttons for the quick menu
+    if (handleQuickMenuButtonEvent(state, event)) {
+        return;
     }
 
     if (event->state == SDL_PRESSED) {

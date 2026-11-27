@@ -152,6 +152,10 @@ public:
 
     void updatePointerRegionLock();
 
+    // Artemis (quickmenuinput.cpp): while the quick menu is open, it takes the
+    // keyboard and the gamepads' buttons, and the host has them released
+    void setQuickMenuOpen(bool open);
+
     static
     QString getUnmappedGamepads();
 
@@ -189,6 +193,11 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
+    // Artemis (quickmenuinput.cpp): return true if the event is the quick
+    // menu's and mustn't reach the host
+    bool handleQuickMenuKeyEvent(SDL_KeyboardEvent* event);
+    bool handleQuickMenuButtonEvent(GamepadState* state, SDL_ControllerButtonEvent* event);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -220,6 +229,8 @@ private:
     int m_GamepadMask;
     GamepadState m_GamepadState[MAX_GAMEPADS];
     QSet<uint32_t> m_KeysDown;
+    bool m_QuickMenuOpen = false;
+    QSet<int> m_QuickMenuKeysDown; // Scancodes the quick menu took, until they're released
     bool m_FakeMouseCaptureActive;
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;

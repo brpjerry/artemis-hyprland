@@ -11,11 +11,10 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 
-#include "backend/quickmenumanager.h"
 #include "backend/servercommandmanager.h"
 #include "backend/clipboardmanager.h"
 
-class QuickMenuManager;
+class QuickMenu;
 class ServerCommandManager;
 class ClipboardManager;
 
@@ -294,7 +293,7 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
-    QuickMenuManager* m_QuickMenuManager;
+    QuickMenu* m_QuickMenu;
     ServerCommandManager* m_ServerCommandManager;
     ClipboardManager* m_ClipboardManager;
 

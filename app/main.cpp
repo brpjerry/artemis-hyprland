@@ -56,7 +56,6 @@
 #include "gui/sdlgamepadkeynavigation.h"
 #include "backend/clipboardmanager.h"
 #include "backend/servercommandmanager.h"
-#include "backend/quickmenumanager.h"
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
@@ -981,11 +980,6 @@ int main(int argc, char *argv[])
                                                    [](QQmlEngine*, QJSEngine*) -> QObject* {
                                                        return new ServerCommandManager();
                                                    });
-    qmlRegisterSingletonType<QuickMenuManager>("QuickMenuManager", 1, 0,
-                                               "QuickMenuManager",
-                                               [](QQmlEngine*, QJSEngine*) -> QObject* {
-                                                   return new QuickMenuManager();
-                                               });
 
     // Create the identity manager on the main thread
     IdentityManager::get();

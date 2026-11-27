@@ -2,7 +2,7 @@
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
-#include "backend/quickmenumanager.h"
+#include "quickmenu.h"
 #include "backend/servercommandmanager.h"
 #include "backend/clipboardmanager.h"
 
@@ -530,9 +530,7 @@ Session::getDecoderAvailability(SDL_Window* window,
 
 void Session::toggleQuickMenu()
 {
-    if (m_QuickMenuManager) {
-        m_QuickMenuManager->toggle();
-    }
+    m_QuickMenu->toggle();
 }
 
 bool Session::populateDecoderProperties(SDL_Window* window)
@@ -614,7 +612,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0),
-      m_QuickMenuManager(new QuickMenuManager()),
+      m_QuickMenu(new QuickMenu(m_OverlayManager)),
       m_ServerCommandManager(new ServerCommandManager()),
       m_ClipboardManager(ClipboardManager::instance())
 {
@@ -625,10 +623,10 @@ Session::~Session()
     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
 
-    if (m_QuickMenuManager) {
-        delete m_QuickMenuManager;
-        m_QuickMenuManager = nullptr;
-    }
+    // Detached at the end of exec(), so this only frees it
+    delete m_QuickMenu;
+    m_QuickMenu = nullptr;
+
     if (m_ServerCommandManager) {
         delete m_ServerCommandManager;
         m_ServerCommandManager = nullptr;
@@ -1034,26 +1032,12 @@ bool Session::initialize(QQuickWindow* qtWindow)
         return false;
     }
 
-    // Initialize ServerCommandManager and ClipboardManager after everything is configured
-    if (m_ServerCommandManager && m_QuickMenuManager && m_ClipboardManager) {
-        // Set up the ServerCommandManager with the computer and HTTP client
-        NvHTTP* httpClient = new NvHTTP(m_Computer);
-        // setConnection() only borrows it; the manager's lifetime owns it
-        httpClient->setParent(m_ServerCommandManager);
-        m_ServerCommandManager->setConnection(m_Computer, httpClient);
-
-        // Connect the ServerCommandManager to the QuickMenuManager
-        m_QuickMenuManager->setServerCommandManager(m_ServerCommandManager);
-        
-        // Connect the ClipboardManager to the QuickMenuManager
-        m_QuickMenuManager->setClipboardManager(m_ClipboardManager);
-
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "ServerCommandManager and ClipboardManager initialized and connected to QuickMenuManager");
-    } else {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Failed to initialize ServerCommandManager, ClipboardManager or QuickMenuManager is null");
-    }
+    // Set up the ServerCommandManager with the computer and an HTTP client.
+    // The quick menu uses it during the stream.
+    NvHTTP* httpClient = new NvHTTP(m_Computer);
+    // setConnection() only borrows it; the manager's lifetime owns it
+    httpClient->setParent(m_ServerCommandManager);
+    m_ServerCommandManager->setConnection(m_Computer, httpClient);
 
     return true;
 }
@@ -2049,20 +2033,6 @@ void Session::exec()
 
     m_InputHandler->setWindow(m_Window);
 
-    // Set window geometry for QuickMenuManager
-    if (m_QuickMenuManager) {
-        // Get actual window position after SDL window creation
-        int actualX, actualY;
-        SDL_GetWindowPosition(m_Window, &actualX, &actualY);
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Setting QuickMenuManager geometry: %d,%d %dx%d (actual pos: %d,%d)", 
-                    x, y, width, height, actualX, actualY);
-        m_QuickMenuManager->setWindowGeometry(actualX, actualY, width, height);
-    } else {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "QuickMenuManager is null when trying to set geometry");
-    }
-
     QSvgRenderer svgIconRenderer(QString(":/res/artemis.svg"));
     QImage svgImage(ICON_SIZE, ICON_SIZE, QImage::Format_RGBA8888);
     svgImage.fill(0);
@@ -2148,19 +2118,13 @@ void Session::exec()
     // Clipboard sync runs on this event loop, from here until DispatchDeferredCleanup
     m_ClipboardManager->setConnection(m_Computer);
 
+    // So does the quick menu, which is drawn into the stream as an overlay
+    m_QuickMenu->attach(m_Window, m_InputHandler, m_Computer, m_ServerCommandManager, m_ClipboardManager);
+
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
     for (;;) {
-        // The quick menu is a QML window. While it's visible, the Qt event loop
-        // has to run for it to render, take input and close, but this loop owns
-        // the GUI thread. So pump Qt events here and wait on SDL only briefly,
-        // since the menu's input arrives on Qt's display connection, not SDL's.
-        const bool quickMenuVisible = m_QuickMenuManager && m_QuickMenuManager->isVisible();
-        if (quickMenuVisible) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        }
-
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
@@ -2171,7 +2135,7 @@ void Session::exec()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, quickMenuVisible ? 10 : 1000)) {
+        if (!SDL_WaitEventTimeout(&event, 1000)) {
             presence.runCallbacks();
             m_ClipboardManager->processStrandedWork();
             continue;
@@ -2237,6 +2201,9 @@ void Session::exec()
                 break;
             case SDL_CODE_CLIPBOARD_WAKE:
                 m_ClipboardManager->processPendingWork();
+                break;
+            case SDL_CODE_QUICK_MENU_TIMER:
+                m_QuickMenu->handleTimer();
                 break;
             default:
                 SDL_assert(false);
@@ -2523,6 +2490,12 @@ void Session::exec()
         // too. After dispatch, so SDL_QUIT goes straight to cleanup and the
         // clipboard and focus handlers keep their ordering.
         m_ClipboardManager->processStrandedWork();
+
+        // A window event can resize the stream or recreate its renderer (which
+        // drops the overlay), so draw the quick menu again for it
+        if (event.type == SDL_WINDOWEVENT || event.type == SDL_RENDER_DEVICE_RESET) {
+            m_QuickMenu->refresh();
+        }
     }
 
 DispatchDeferredCleanup:
@@ -2530,10 +2503,8 @@ DispatchDeferredCleanup:
     // the clipboard can be handed over to Qt
     m_ClipboardManager->disconnect();
 
-    // The quick menu acts on this stream; don't leave it open once Qt resumes
-    if (m_QuickMenuManager) {
-        m_QuickMenuManager->setVisible(false);
-    }
+    // The quick menu acts on this stream: close it and clear its overlay
+    m_QuickMenu->detach();
 
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
