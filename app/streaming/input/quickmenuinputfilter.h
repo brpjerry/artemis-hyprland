@@ -75,6 +75,13 @@ public:
         return Route::Host;
     }
 
+    // A key press the menu took without opening (its shortcut, when it
+    // can't be shown): the host doesn't get its release either
+    void claimKey(int scancode)
+    {
+        m_MenuKeys.insert(scancode);
+    }
+
     bool ownsKey(int scancode) const
     {
         return m_MenuKeys.contains(scancode);
@@ -132,6 +139,14 @@ inline void menuOpened(int& hostButtons, int& menuButtons)
 {
     menuButtons |= hostButtons;
     hostButtons = 0;
+}
+
+// A button press the menu took without opening (its shortcut, when it can't
+// be shown): the host gets neither it nor its release
+inline void claimButton(int& hostButtons, int& menuButtons, int buttonFlag)
+{
+    hostButtons &= ~buttonFlag;
+    menuButtons |= buttonFlag;
 }
 
 // Returns true if the event is the menu's: the host's input handling must not

@@ -432,13 +432,17 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quick menu toggle gamepad combo");
 
-        // Toggle the quick menu
+        // Toggle the quick menu. Opening it releases every pad on the host
+        // itself, and the send below is then held back.
         Session::get()->toggleQuickMenu();
 
-        // Clear buttons down on this gamepad
-        LiSendMultiControllerEvent(state->index, m_GamepadMask,
-                                   0, 0, 0, 0, 0, 0, 0);
-        return;
+        // If it can't open, the host keeps the pad's other buttons, sticks
+        // and triggers (and other merged pads), but not the button that
+        // completed the shortcut, nor later its release. In mouse emulation,
+        // that press may have sent a mouse button, whose release must follow.
+        if (!m_QuickMenuOpen && event->state == SDL_PRESSED && state->mouseEmulationTimer == 0) {
+            QuickMenuButtonFilter::claimButton(state->buttons, state->quickMenuButtons, k_ButtonMap[event->button]);
+        }
     }
 
     // Only send the gamepad state to the host if it's not in mouse emulation mode

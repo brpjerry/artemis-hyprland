@@ -72,9 +72,25 @@ bool SdlInputHandler::handleQuickMenuKeyEvent(SDL_KeyboardEvent* event)
     const bool pressed = event->state == SDL_PRESSED;
     const bool repeat = event->repeat != 0;
 
+    // The toggle combo, matched as in handleKeyEvent()
+    const auto& toggleCombo = m_SpecialKeyCombos[KeyComboToggleQuickMenu];
+    auto isToggleCombo = [&]() {
+        return pressed && !repeat && toggleCombo.enabled &&
+               (event->keysym.mod & KMOD_CTRL) &&
+               (event->keysym.mod & KMOD_ALT) &&
+               (event->keysym.mod & KMOD_SHIFT) &&
+               (event->keysym.sym == toggleCombo.keyCode || event->keysym.scancode == toggleCombo.scanCode);
+    };
+
     // This also clears modifiers the menu still owns from events for the host
     switch (m_QuickMenuKeyFilter.route(event->keysym.scancode, pressed, repeat, m_QuickMenuOpen, &event->keysym.mod)) {
     case QuickMenuKeyFilter::Route::Host:
+        // performSpecialKeyCombo() handles the combo, and the host never sees
+        // its key pressed. Make the key the menu's so its release doesn't
+        // reach the host either, even if the menu can't open.
+        if (isToggleCombo()) {
+            m_QuickMenuKeyFilter.claimKey(event->keysym.scancode);
+        }
         return false;
     case QuickMenuKeyFilter::Route::Drop:
         return true;
@@ -84,13 +100,8 @@ bool SdlInputHandler::handleQuickMenuKeyEvent(SDL_KeyboardEvent* event)
 
     QuickMenu* quickMenu = Session::get()->m_QuickMenu;
 
-    // The toggle combo closes the menu, as in performSpecialKeyCombo()
-    const auto& toggleCombo = m_SpecialKeyCombos[KeyComboToggleQuickMenu];
-    if (!repeat && toggleCombo.enabled &&
-            (event->keysym.mod & KMOD_CTRL) &&
-            (event->keysym.mod & KMOD_ALT) &&
-            (event->keysym.mod & KMOD_SHIFT) &&
-            (event->keysym.sym == toggleCombo.keyCode || event->keysym.scancode == toggleCombo.scanCode)) {
+    // The toggle combo closes the menu
+    if (isToggleCombo()) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Detected quick menu toggle combo");
         quickMenu->close();
         return true;
