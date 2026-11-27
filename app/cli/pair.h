@@ -20,7 +20,9 @@ class Launcher : public QObject
     Q_DECLARE_PRIVATE_D(m_DPtr, Launcher)
 
 public:
+    // A non-empty otpPassphrase pairs with Apollo's OTP (predefinedPin)
     explicit Launcher(QString computer, QString predefinedPin,
+                      QString otpPassphrase = QString(),
                       QObject *parent = nullptr);
     ~Launcher();
     Q_INVOKABLE void execute(ComputerManager *manager);

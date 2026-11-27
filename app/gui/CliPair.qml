@@ -9,7 +9,12 @@ Item {
     }
 
     function onPairing(pcName, pin) {
-        stageLabel.text = qsTr("Pairing... Please enter '%1' on %2.").arg(pin).arg(pcName)
+        if (pin === "") {
+            // Apollo OTP pairing: the PIN came from the host
+            stageLabel.text = qsTr("Pairing with %1 using the OTP...").arg(pcName)
+        } else {
+            stageLabel.text = qsTr("Pairing... Please enter '%1' on %2.").arg(pin).arg(pcName)
+        }
     }
 
     function onFailed(message) {

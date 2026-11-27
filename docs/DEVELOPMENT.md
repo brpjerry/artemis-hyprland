@@ -39,7 +39,7 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 ### ✅ Phase 2: Foundation Implementation (COMPLETED)
 - [x] **Core Architecture**
   - [x] Implement ClipboardManager with real Artemis protocol
-  - [x] Implement OTPPairingManager with SHA-256 authentication
+  - [x] Implement Apollo OTP pairing with SHA-256 authentication
   - [x] Implement ServerCommandManager with permission system
   - [x] Update all components to match Android implementation
 - [x] **Protocol Implementation**
@@ -51,7 +51,7 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 ### 🔄 Phase 3: Integration & Testing (IN PROGRESS)
 - [ ] **Moonlight Qt Integration**
   - [ ] Extend NvHTTP class with clipboard endpoints
-  - [ ] Extend NvPairingManager with OTP support
+  - [x] Extend NvPairingManager with OTP support
   - [ ] Extend NvComputer with Apollo permission tracking
   - [ ] Integrate managers with existing session flow
 - [ ] **UI Implementation**
@@ -134,10 +134,10 @@ This document tracks our progress on implementing Artemis features in the Qt cli
   - All Android settings (smart sync, toast notifications, hide content)
   - 1MB size limit (matches Android)
 
-- **OTPPairingManager**: Real OTP authentication with SHA-256 hashing
-  - `SHA256(pin + salt + passphrase)` for `&otpauth=` parameter
+- **Apollo OTP pairing** (`NvPairingManager::pair()` with `OtpAuth`): `SHA256(pin + salt + passphrase)` as the `&otpauth=` parameter, then the PIN handshake with the OTP as the PIN
+  - The host's signed secret and challenge hash are verified before its certificate is trusted
   - 4-digit PIN validation (matches Android constraint)
-  - Apollo server detection and validation
+  - `artemis pair <host> --pin <OTP> --passphrase <passphrase>` from the command line
   - Integration framework for existing NvPairingManager
 
 - **ServerCommandManager**: Apollo permission system and command framework
@@ -203,7 +203,7 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 app/backend/
 ├── clipboardmanager.*      # Clipboard sync (framework created)
 ├── servercommandmanager.*  # Server commands (framework created)
-└── otppairingmanager.*     # OTP pairing (framework created)
+└── nvpairingmanager.*      # PIN and Apollo OTP pairing
 
 app/settings/
 └── artemissettings.*       # Centralized settings (implemented)

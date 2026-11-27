@@ -1044,7 +1044,8 @@ int main(int argc, char *argv[])
             initialView = "qrc:/gui/CliPair.qml";
             PairCommandLineParser pairParser;
             pairParser.parse(app.arguments());
-            auto launcher = new CliPair::Launcher(pairParser.getHost(), pairParser.getPredefinedPin(), &app);
+            auto launcher = new CliPair::Launcher(pairParser.getHost(), pairParser.getPredefinedPin(),
+                                                 pairParser.getOtpPassphrase(), &app);
             engine.rootContext()->setContextProperty("launcher", launcher);
             break;
         }
