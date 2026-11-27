@@ -167,6 +167,9 @@ public:
     void releaseRenderLock() {
         SDL_UnlockMutex(m_RenderLock);
     }
+    bool tryAcquireRenderLock() {
+        return SDL_TryLockMutex(m_RenderLock) == 0;
+    }
 
     virtual bool initialize(PDECODER_PARAMETERS params) = 0;
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary** options) = 0;
