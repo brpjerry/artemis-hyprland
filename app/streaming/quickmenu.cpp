@@ -128,6 +128,14 @@ void QuickMenu::open()
         return;
     }
 
+    // A menu nobody can see would still take the keyboard and gamepads, and
+    // the next Enter or A would disconnect the stream
+    if (!m_OverlayManager.canShowOverlay(Overlay::OverlayQuickMenu)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Not opening the quick menu: the renderer can't display it");
+        return;
+    }
+
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Opening the quick menu");
 
     // Pick up the host's current command list, as the host indexes it
@@ -335,6 +343,16 @@ void QuickMenu::handleTimer()
 
 void QuickMenu::refresh()
 {
+    // A recreated renderer may not be able to display the menu, so give the
+    // input back rather than keep it for a menu nobody can see
+    if (m_Model.isOpen() && !m_OverlayManager.canShowOverlay(Overlay::OverlayQuickMenu)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Closing the quick menu: the new renderer can't display it");
+        m_Status.clear();
+        close();
+        return;
+    }
+
     if (m_OverlayManager.isOverlayEnabled(Overlay::OverlayQuickMenu)) {
         render();
     }

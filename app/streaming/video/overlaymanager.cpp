@@ -121,6 +121,16 @@ void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
     m_Renderer = renderer;
 }
 
+bool OverlayManager::canShowOverlay(OverlayType type)
+{
+    if (m_FontData.isEmpty() || TTF_WasInit() == 0) {
+        return false;
+    }
+
+    QReadLocker lock(&m_OverlayRendererLock);
+    return m_Renderer != nullptr && m_Renderer->canShowOverlay(type);
+}
+
 void OverlayManager::notifyOverlayUpdated(OverlayType type)
 {
     QReadLocker lock(&m_OverlayRendererLock);

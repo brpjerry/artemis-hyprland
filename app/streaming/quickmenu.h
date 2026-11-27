@@ -55,7 +55,8 @@ public:
     QuickMenu& operator=(const QuickMenu&) = delete;
 
     // Called right before the stream's event loop starts and right after it
-    // ends. The menu only opens in between.
+    // ends. The menu only opens in between, and only while the renderer can
+    // display it.
     void attach(SDL_Window* window, SdlInputHandler* inputHandler, NvComputer* computer,
                 ServerCommandManager* serverCommandManager, ClipboardManager* clipboardManager);
     void detach();
@@ -72,7 +73,8 @@ public:
     // SDL_CODE_QUICK_MENU_TIMER
     void handleTimer();
 
-    // The window was resized or its renderer recreated: draw again for it
+    // The window was resized or its renderer recreated: draw again for it, or
+    // close if the new renderer can't display the menu
     void refresh();
 
 private:

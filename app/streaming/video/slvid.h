@@ -20,6 +20,9 @@ public:
     virtual int submitDecodeUnit(PDECODE_UNIT du) override;
     virtual void notifyOverlayUpdated(Overlay::OverlayType) override;
 
+    // Artemis: SLVideo shows only the status update overlay
+    virtual bool canShowOverlay(Overlay::OverlayType type) override { return type == Overlay::OverlayStatusUpdate; }
+
     // Unused since rendering is done directly from the decode thread
     virtual void renderFrameOnMainThread() override {}
 

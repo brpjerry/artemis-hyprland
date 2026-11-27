@@ -21,6 +21,9 @@ public:
     virtual ~IOverlayRenderer() = default;
 
     virtual void notifyOverlayUpdated(OverlayType type) = 0;
+
+    // Artemis: whether this renderer can display this overlay right now
+    virtual bool canShowOverlay(OverlayType) { return true; }
 };
 
 class OverlayManager
@@ -41,10 +44,16 @@ public:
 
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
+    // Artemis: whether the current renderer can display this overlay (false
+    // while there's no renderer, or no font to draw text with)
+    bool canShowOverlay(OverlayType type);
+
     // Artemis: draws this overlay's text on a backdrop panel, line by line and
-    // without wrapping, at the largest font size up to maxFontSize that keeps
-    // the panel within maxWidth x maxHeight pixels. A line starting with '>'
-    // is highlighted. Call it on the thread that updates the overlay's text.
+    // without wrapping. The font size is the largest up to maxFontSize that
+    // keeps the panel within maxWidth x maxHeight pixels, found by estimating
+    // from one measurement and stepping down, but never below 8, so a very
+    // small window can clip the panel. A line starting with '>' is
+    // highlighted. Call it on the thread that updates the overlay's text.
     void setOverlayFitArea(OverlayType type, int maxWidth, int maxHeight, int maxFontSize);
 
 private:

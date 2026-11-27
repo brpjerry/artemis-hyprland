@@ -1527,6 +1527,15 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
     }
 }
 
+bool DrmRenderer::canShowOverlay(Overlay::OverlayType type)
+{
+    std::lock_guard lg { m_OverlayLock };
+
+    // Artemis: the same conditions notifyOverlayUpdated() needs to draw it
+    return m_PropSetter.isAtomic() &&
+           (m_OverlayCompositionSurface != nullptr || m_OverlayPlanes[type].isValid());
+}
+
 void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     std::lock_guard lg { m_OverlayLock };

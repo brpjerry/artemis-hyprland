@@ -174,8 +174,7 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
     // SLVideo supports only one visible overlay at a time. Since we don't have
     // stats like the FFmpeg-based decoders, we'll just support the status update
     // overlay and nothing else.
-    // Artemis: and the quick menu, which takes the overlay while it's up
-    if (type != Overlay::OverlayStatusUpdate && type != Overlay::OverlayQuickMenu) {
+    if (type != Overlay::OverlayStatusUpdate) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Unsupported overlay type: %d", type);
         return;
@@ -183,12 +182,6 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
 
     SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
     bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (type == Overlay::OverlayStatusUpdate &&
-            Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayQuickMenu)) {
-        // Status updates wait for the next one after the quick menu closes
-        SDL_FreeSurface(newSurface);
-        return;
-    }
     if (newSurface == nullptr && overlayEnabled) {
         // There's no updated surface and the overlay is enabled, so just leave the old surface alone.
         return;
@@ -225,13 +218,7 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
     // Position the status overlay at the bottom left corner
     float flWidth = (float)newSurface->w / m_ViewportWidth;
     float flHeight = (float)newSurface->h / m_ViewportHeight;
-    if (type == Overlay::OverlayQuickMenu) {
-        // Artemis: the quick menu is centered
-        SLVideo_SetOverlayDisplayArea(m_Overlay, SDL_max(0.0f, (1.0f - flWidth) / 2), SDL_max(0.0f, (1.0f - flHeight) / 2), flWidth, flHeight);
-    }
-    else {
-        SLVideo_SetOverlayDisplayArea(m_Overlay, 0.0f, 1.0f - flHeight, flWidth, flHeight);
-    }
+    SLVideo_SetOverlayDisplayArea(m_Overlay, 0.0f, 1.0f - flHeight, flWidth, flHeight);
 
     // We're done with the surface now
     SDL_FreeSurface(newSurface);

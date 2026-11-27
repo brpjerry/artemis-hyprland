@@ -20,6 +20,9 @@ public:
     virtual int getDecoderColorspace() override;
     virtual int getDecoderColorRange() override;
 
+    // Artemis: this renderer draws no overlays
+    virtual bool canShowOverlay(Overlay::OverlayType) override { return false; }
+
 private:
     static void InputPortCallback(MMAL_PORT_T* port, MMAL_BUFFER_HEADER_T* buffer);
     bool getDtDeviceStatus(QString name, bool ifUnknown);

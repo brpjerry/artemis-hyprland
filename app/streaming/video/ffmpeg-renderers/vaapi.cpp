@@ -668,6 +668,13 @@ int VAAPIRenderer::getDecoderCapabilities()
     return caps;
 }
 
+bool VAAPIRenderer::canShowOverlay(Overlay::OverlayType)
+{
+    // Artemis: overlays are only drawn as subpictures with direct rendering
+    // on X11, which needs an overlay format
+    return m_WindowSystem == SDL_SYSWM_X11 && m_OverlayFormat.fourcc != 0;
+}
+
 void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
