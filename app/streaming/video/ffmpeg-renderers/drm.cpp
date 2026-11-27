@@ -1471,8 +1471,23 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
         SDL_Rect overlayUnionRect;
         SDL_UnionRect(overlayRect, &m_OverlayRects[type], &overlayUnionRect);
 
+        // Artemis: the row copy below writes the whole union, which can reach
+        // past the composition surface (a large quick menu panel on a small
+        // output). SDL's clear and blit clip to the surface, so use those then.
+        SDL_Rect surfaceRect = { 0, 0, m_OverlayCompositionSurface->w, m_OverlayCompositionSurface->h };
+        SDL_Rect clippedUnionRect;
+        if (!SDL_IntersectRect(&overlayUnionRect, &surfaceRect, &clippedUnionRect)) {
+            // Nothing of either overlay is on the surface
+            SDL_zerop(overlayRect);
+            return;
+        }
+        if (!SDL_RectEquals(&clippedUnionRect, &overlayUnionRect)) {
+            SDL_FillRect(m_OverlayCompositionSurface, &m_OverlayRects[type], 0);
+            SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
+            overlayUnionRect = clippedUnionRect;
+        }
         // If the new overlay completely covers the old overlay, blit it all at once
-        if (SDL_RectEquals(&overlayUnionRect, overlayRect)) {
+        else if (SDL_RectEquals(&overlayUnionRect, overlayRect)) {
             SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
         }
         else {
@@ -1622,6 +1637,13 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
                     struct drm_mode_destroy_dumb destroyBuf = {};
                     destroyBuf.handle = dumbBuffer;
                     drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
+
+                    // Artemis: without a composition surface either, there's
+                    // nothing to draw on, and those buffers are gone
+                    if (!m_OverlayCompositionSurface) {
+                        SDL_FreeSurface(newSurface);
+                        return;
+                    }
                 }
             }
         }
