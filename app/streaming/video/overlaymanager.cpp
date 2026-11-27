@@ -170,7 +170,9 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
     }
 
     // Construct the required font to render the overlay
-    if (m_Overlays[type].font == nullptr) {
+    // Artemis: fitted panels open their own font, and disabling an overlay
+    // needs none, so a font that won't open can't keep it on screen
+    if (m_Overlays[type].enabled && m_Overlays[type].fitWidth == 0 && m_Overlays[type].font == nullptr) {
         if (m_FontData.isEmpty()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "SDL overlay font failed to load");

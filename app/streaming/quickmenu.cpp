@@ -152,11 +152,16 @@ void QuickMenu::open()
 
     m_Model.open(hostState());
 
-    // The menu takes the keyboard and gamepad buttons from here on, and
-    // anything held down is released on the host
-    m_InputHandler->setQuickMenuOpen(true);
-
+    // Draw it first: if that fails, render() closes it, and the host keeps
+    // whatever is held down
     render();
+
+    // The menu takes the keyboard and gamepad buttons from here on, and
+    // anything held down is released on the host. Nothing else runs on this
+    // thread in between, so no input event can slip past it.
+    if (m_Model.isOpen()) {
+        m_InputHandler->setQuickMenuOpen(true);
+    }
 }
 
 void QuickMenu::close()
