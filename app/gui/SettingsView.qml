@@ -284,10 +284,7 @@ Flickable {
                                 StreamingPreferences.height = selectedHeight
 
                                 if (StreamingPreferences.autoAdjustBitrate) {
-                                    StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                              StreamingPreferences.height,
-                                                                                                              StreamingPreferences.fps,
-                                                                                                              StreamingPreferences.enableYUV444);
+                                    StreamingPreferences.bitrateKbps = slider.defaultBitrate()
                                     slider.value = StreamingPreferences.bitrateKbps
                                 }
                             }
@@ -453,10 +450,7 @@ Flickable {
                                 StreamingPreferences.fps = selectedFps
 
                                 if (StreamingPreferences.autoAdjustBitrate) {
-                                    StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                              StreamingPreferences.height,
-                                                                                                              StreamingPreferences.fps,
-                                                                                                              StreamingPreferences.enableYUV444);
+                                    StreamingPreferences.bitrateKbps = slider.defaultBitrate()
                                     slider.value = StreamingPreferences.bitrateKbps
                                 }
                             }
@@ -501,9 +495,12 @@ Flickable {
 
                         // Custom refresh rates are parsed, prefilled and labeled in the locale
                         // the dialog's validator accepts, so they all use the same decimal
-                        // separator (e.g. "59,94" in a comma-decimal locale)
+                        // separator (e.g. "59,94" in a comma-decimal locale). The validator
+                        // uses the default QLocale(), which Qt.locale() also returns. Don't
+                        // rebuild it from the validator's locale name: that would drop user
+                        // customizations of the system locale, such as its decimal separator.
                         function refreshRateLocale() {
-                            return Qt.locale(refreshRateValidator.locale)
+                            return Qt.locale()
                         }
 
                         function customRefreshRateText(rate) {
@@ -527,6 +524,11 @@ Flickable {
                             onOpened: {
                                 // Force keyboard focus on the textbox so keyboard navigation works
                                 fpsField.forceActiveFocus()
+                            }
+
+                            onAboutToShow: {
+                                // Fill in the field before the entrance transition, since the
+                                // dialog takes input (and OK) while it's still animating
 
                                 // Start from the saved custom refresh rate, if it's in effect
                                 const savedRate = fpsComboBox.savedCustomRefreshRate()
@@ -606,7 +608,10 @@ Flickable {
                                 RowLayout {
                                         TextField {
                                             id: fpsField
-                                            maximumLength: 6
+                                            // Room for the largest rate in this locale's digits, some of
+                                            // which take two UTF-16 code units
+                                            maximumLength: refreshRateValidator.top.toLocaleString(fpsComboBox.refreshRateLocale(), 'f',
+                                                                                                    refreshRateValidator.decimals).length
                                             inputMethodHints: Qt.ImhFormattedNumbersOnly
                                             placeholderText: "144.0"
                                             validator: refreshRateValidator
@@ -793,6 +798,18 @@ Flickable {
                     Slider {
                         id: slider
 
+                        // The default bitrate for the current settings, limited to the
+                        // slider's range. Every default written on this page uses it, so
+                        // the saved bitrate is always the one the slider shows (a value
+                        // past the range would be clamped on screen but saved as is).
+                        function defaultBitrate() {
+                            return Math.max(slider.from, Math.min(slider.to,
+                                StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
+                                                                       StreamingPreferences.height,
+                                                                       StreamingPreferences.fps,
+                                                                       StreamingPreferences.enableYUV444)))
+                        }
+
                         value: StreamingPreferences.bitrateKbps
 
                         stepSize: 500
@@ -819,10 +836,10 @@ Flickable {
 
                     Button {
                         id: resetBitrateButton
-                        text: qsTr("Use Default (%1 Mbps)").arg(StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444) / 1000.0)
-                        visible: StreamingPreferences.bitrateKbps !== StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444)
+                        text: qsTr("Use Default (%1 Mbps)").arg(slider.defaultBitrate() / 1000.0)
+                        visible: StreamingPreferences.bitrateKbps !== slider.defaultBitrate()
                         onClicked: {
-                            var defaultBitrate = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width, StreamingPreferences.height, StreamingPreferences.fps, StreamingPreferences.enableYUV444)
+                            var defaultBitrate = slider.defaultBitrate()
                             StreamingPreferences.bitrateKbps = defaultBitrate
                             StreamingPreferences.autoAdjustBitrate = true
                             slider.value = defaultBitrate
@@ -1985,10 +2002,7 @@ Flickable {
                         if (StreamingPreferences.enableYUV444 != checked) {
                             StreamingPreferences.enableYUV444 = checked
                             if (StreamingPreferences.autoAdjustBitrate) {
-                                StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                          StreamingPreferences.height,
-                                                                                                          StreamingPreferences.fps,
-                                                                                                          StreamingPreferences.enableYUV444);
+                                StreamingPreferences.bitrateKbps = slider.defaultBitrate()
                                 slider.value = StreamingPreferences.bitrateKbps
                             }
                         }

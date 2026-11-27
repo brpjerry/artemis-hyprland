@@ -1800,7 +1800,7 @@ bool Session::startConnectionAsync()
         NvHTTP http(m_Computer);
         http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
                       m_Computer->isNvidiaServerSoftware,
-                      m_App.id, m_App.uuid, &m_StreamConfig,
+                      m_App.id, m_App.uuid, &m_StreamConfig, m_StreamFpsIsMillihertz,
                       enableGameOptimizations,
                       m_Preferences->playAudioOnHost,
                       m_InputHandler->getAttachedGamepadMask(),
